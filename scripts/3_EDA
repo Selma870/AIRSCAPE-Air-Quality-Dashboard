@@ -1,0 +1,5997 @@
+
+# ============================================================
+# GELAR RASA 2026
+# TAHAP 3.1 - DATA OVERVIEW
+# ============================================================
+
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(writexl)
+
+# 1. Pilih folder HASIL_DATA_AUDIT
+
+folder_output <- choose.dir(
+  caption = "Pilih folder HASIL_DATA_AUDIT"
+)
+
+if (is.na(folder_output)) {
+  stop("Folder belum dipilih!")
+}
+
+# 2. Membaca data hasil Tahap 2
+
+aqms_analysis <- read_csv(
+  file.path(
+    folder_output,
+    "AQMS_Analysis_Valid.csv"
+  ),
+  show_col_types = FALSE
+)
+
+health_clean <- read_csv(
+  file.path(
+    folder_output,
+    "Health_Clean.csv"
+  ),
+  show_col_types = FALSE
+)
+
+# 3. Memastikan format tanggal
+
+aqms_analysis <- aqms_analysis %>%
+  mutate(
+    timestamp_start = ymd_hms(
+      timestamp_start,
+      quiet = TRUE
+    ),
+    tanggal = as.Date(timestamp_start)
+  )
+
+health_clean <- health_clean %>%
+  mutate(
+    date = as.Date(date)
+  )
+
+
+# ============================================================
+# A. OVERVIEW DATASET
+# ============================================================
+
+overview_data <- tibble(
+  
+  komponen = c(
+    "Jumlah data AQMS",
+    "Jumlah stasiun AQMS",
+    "Jumlah data Health",
+    "Jumlah rumah sakit",
+    "Tanggal awal AQMS",
+    "Tanggal akhir AQMS",
+    "Tanggal awal Health",
+    "Tanggal akhir Health"
+  ),
+  
+  hasil = c(
+    nrow(aqms_analysis),
+    n_distinct(aqms_analysis$station_file),
+    nrow(health_clean),
+    n_distinct(health_clean$hospital_id),
+    as.character(min(aqms_analysis$tanggal, na.rm = TRUE)),
+    as.character(max(aqms_analysis$tanggal, na.rm = TRUE)),
+    as.character(min(health_clean$date, na.rm = TRUE)),
+    as.character(max(health_clean$date, na.rm = TRUE))
+  )
+)
+
+print(overview_data)
+
+
+# ============================================================
+# B. JUMLAH PENGAMATAN PER STASIUN
+# ============================================================
+
+overview_stasiun <- aqms_analysis %>%
+  count(
+    station_file,
+    name = "jumlah_data"
+  ) %>%
+  arrange(desc(jumlah_data))
+
+print(overview_stasiun, n = Inf)
+
+
+# ============================================================
+# C. KELOMPOK SATUAN
+# ============================================================
+
+overview_satuan <- aqms_analysis %>%
+  group_by(station_file) %>%
+  summarise(
+    jumlah_ug_m3 = sum(!is.na(pm25_ug_m3)),
+    jumlah_ppm = sum(!is.na(pm25_ppm)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    satuan = case_when(
+      jumlah_ug_m3 > 0 ~ "ug/m3",
+      jumlah_ppm > 0 ~ "ppm",
+      TRUE ~ "Tidak tersedia"
+    )
+  )
+
+print(overview_satuan, n = Inf)
+
+
+# ============================================================
+# D. CAKUPAN DATA PER BULAN
+# ============================================================
+
+cakupan_bulanan <- aqms_analysis %>%
+  mutate(
+    bulan = floor_date(
+      timestamp_start,
+      unit = "month"
+    )
+  ) %>%
+  count(
+    station_file,
+    bulan,
+    name = "jumlah_pengamatan"
+  )
+
+print(head(cakupan_bulanan, 20))
+
+
+# ============================================================
+# E. TREN KESEHATAN PER BULAN
+# ============================================================
+
+tren_health <- health_clean %>%
+  mutate(
+    bulan = floor_date(
+      date,
+      unit = "month"
+    )
+  ) %>%
+  group_by(bulan) %>%
+  summarise(
+    
+    ispa_lansia = sum(
+      resp_admissions_over60,
+      na.rm = TRUE
+    ),
+    
+    asma = sum(
+      asthma_emergency_cases,
+      na.rm = TRUE
+    ),
+    
+    copd = sum(
+      copd_admissions,
+      na.rm = TRUE
+    ),
+    
+    gangguan_pernapasan_umum = sum(
+      resp,
+      na.rm = TRUE
+    ),
+    
+    .groups = "drop"
+  )
+
+print(tren_health)
+
+
+# ============================================================
+# F. EKSPOR HASIL EDA 3.1
+# ============================================================
+
+hasil_eda_31 <- list(
+  
+  "Overview_Data" = overview_data,
+  
+  "Jumlah_Per_Stasiun" = overview_stasiun,
+  
+  "Kelompok_Satuan" = overview_satuan,
+  
+  "Cakupan_Bulanan" = cakupan_bulanan,
+  
+  "Tren_Health" = tren_health
+)
+
+write_xlsx(
+  hasil_eda_31,
+  file.path(
+    folder_output,
+    "Hasil_EDA_Bagian_3_1.xlsx"
+  )
+)
+
+cat("EDA 3.1 berhasil disimpan!")
+
+
+# ============================================================
+# DIAGNOSTIK TIMESTAMP EDA 3.1
+# ============================================================
+
+# 1. Periksa tipe data timestamp
+
+class(aqms_analysis$timestamp_start)
+
+# 2. Periksa jumlah timestamp kosong
+
+sum(is.na(aqms_analysis$timestamp_start))
+
+# 3. Periksa baris yang tanggalnya tidak terbaca
+
+aqms_analysis %>%
+  filter(is.na(timestamp_start)) %>%
+  select(
+    station_file,
+    sensor_id,
+    timestamp_start
+  ) %>%
+  head(20)
+
+# 4. Periksa data tanggal 31 Desember 2023
+
+aqms_analysis %>%
+  filter(
+    as.Date(timestamp_start) ==
+      as.Date("2023-12-31")
+  ) %>%
+  count(station_file)
+
+# 5. Periksa rentang waktu per stasiun
+
+aqms_analysis %>%
+  group_by(station_file) %>%
+  summarise(
+    tanggal_awal = min(
+      as.Date(timestamp_start),
+      na.rm = TRUE
+    ),
+    tanggal_akhir = max(
+      as.Date(timestamp_start),
+      na.rm = TRUE
+    ),
+    jumlah_timestamp_kosong =
+      sum(is.na(timestamp_start)),
+    .groups = "drop"
+  )
+
+
+
+# ============================================================
+# GELAR RASA 2026
+# TAHAP 3.2 - TEMPORAL ANALYSIS
+# ============================================================
+
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(writexl)
+
+# ------------------------------------------------------------
+# 1. MENYIAPKAN DATA
+# ------------------------------------------------------------
+
+# Gunakan objek aqms_analysis hasil validasi timestamp
+
+# Membuat variabel waktu UTC
+
+aqms_temporal <- aqms_analysis %>%
+  mutate(
+    waktu = timestamp_start,
+    tanggal = as.Date(waktu),
+    jam = hour(waktu),
+    hari = wday(
+      waktu,
+      label = TRUE,
+      abbr = FALSE,
+      week_start = 1
+    ),
+    bulan = month(
+      waktu,
+      label = TRUE,
+      abbr = FALSE
+    ),
+    bulan_angka = month(waktu),
+    tahun = year(waktu)
+  )
+
+# ------------------------------------------------------------
+# 2. MEMERIKSA KELOMPOK SATUAN
+# ------------------------------------------------------------
+
+# Analisis konsentrasi PM2.5 dalam ug/m3
+# Tidak mencampurkan data ppm
+
+aqms_temporal_ug <- aqms_temporal %>%
+  filter(!is.na(pm25_ug_m3))
+
+# ------------------------------------------------------------
+# 3. POLA KONSENTRASI BERDASARKAN JAM
+# ------------------------------------------------------------
+
+pola_jam <- aqms_temporal_ug %>%
+  group_by(jam) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(pola_jam)
+
+grafik_jam <- ggplot(
+  pola_jam,
+  aes(x = jam, y = rata_pm25)
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_x_continuous(
+    breaks = 0:23
+  ) +
+  labs(
+    title = "Pola Rata-rata PM2.5 Berdasarkan Jam",
+    x = "Jam (UTC)",
+    y = "Rata-rata PM2.5 (ug/m3)"
+  ) +
+  theme_minimal()
+
+print(grafik_jam)
+
+# ------------------------------------------------------------
+# 4. POLA KONSENTRASI BERDASARKAN HARI
+# ------------------------------------------------------------
+
+pola_hari <- aqms_temporal_ug %>%
+  group_by(hari) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(pola_hari)
+
+grafik_hari <- ggplot(
+  pola_hari,
+  aes(x = hari, y = rata_pm25)
+) +
+  geom_col() +
+  labs(
+    title = "Rata-rata PM2.5 Berdasarkan Hari",
+    x = "Hari",
+    y = "Rata-rata PM2.5 (ug/m3)"
+  ) +
+  theme_minimal()
+
+print(grafik_hari)
+
+# ------------------------------------------------------------
+# 5. TREN BULANAN
+# ------------------------------------------------------------
+
+tren_bulanan <- aqms_temporal_ug %>%
+  mutate(
+    periode = floor_date(
+      waktu,
+      unit = "month"
+    )
+  ) %>%
+  group_by(periode) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(tren_bulanan)
+
+grafik_bulanan <- ggplot(
+  tren_bulanan,
+  aes(x = periode, y = rata_pm25)
+) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Tren Bulanan Rata-rata PM2.5",
+    x = "Bulan",
+    y = "Rata-rata PM2.5 (ug/m3)"
+  ) +
+  theme_minimal()
+
+print(grafik_bulanan)
+
+# ------------------------------------------------------------
+# 6. TREN TAHUNAN
+# ------------------------------------------------------------
+
+tren_tahunan <- aqms_temporal_ug %>%
+  group_by(tahun) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(tren_tahunan)
+
+# ------------------------------------------------------------
+# 7. WAKTU DENGAN KONSENTRASI TERTINGGI
+# ------------------------------------------------------------
+
+pm25_tertinggi <- aqms_temporal_ug %>%
+  arrange(desc(pm25_ug_m3)) %>%
+  select(
+    station_file,
+    waktu,
+    pm25_ug_m3
+  ) %>%
+  slice_head(n = 20)
+
+print(pm25_tertinggi)
+
+# ------------------------------------------------------------
+# 8. RINGKASAN POLA TEMPORAL PER STASIUN
+# ------------------------------------------------------------
+
+pola_stasiun <- aqms_temporal_ug %>%
+  group_by(station_file) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    maksimum_pm25 = max(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(rata_pm25))
+
+print(pola_stasiun, n = Inf)
+
+# ------------------------------------------------------------
+# 9. MENYIMPAN HASIL
+# ------------------------------------------------------------
+
+hasil_eda_32 <- list(
+  "Pola_Jam" = pola_jam,
+  "Pola_Hari" = pola_hari,
+  "Tren_Bulanan" = tren_bulanan,
+  "Tren_Tahunan" = tren_tahunan,
+  "PM25_Tertinggi" = pm25_tertinggi,
+  "Pola_Per_Stasiun" = pola_stasiun
+)
+
+write_xlsx(
+  hasil_eda_32,
+  file.path(
+    folder_output,
+    "Hasil_EDA_Bagian_3_2.xlsx"
+  )
+)
+
+ggsave(
+  file.path(
+    folder_output,
+    "Grafik_Pola_Jam_PM25.png"
+  ),
+  grafik_jam,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  file.path(
+    folder_output,
+    "Grafik_Tren_Bulanan_PM25.png"
+  ),
+  grafik_bulanan,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+cat("\nEDA 3.2 berhasil disimpan!\n")
+
+
+# ============================================================
+# VALIDASI LONJAKAN PM2.5 OKTOBER 2026
+# ============================================================
+
+# 1. Ringkasan PM2.5 pada 14 Oktober 2026
+# per stasiun
+
+lonjakan_14okt <- aqms_temporal_ug %>%
+  filter(
+    tanggal == as.Date("2026-10-14")
+  ) %>%
+  group_by(station_file) %>%
+  summarise(
+    jumlah_data = sum(!is.na(pm25_ug_m3)),
+    rata_pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    median_pm25 = median(pm25_ug_m3, na.rm = TRUE),
+    maksimum_pm25 = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(rata_pm25))
+
+print(lonjakan_14okt, n = Inf)
+
+
+# 2. Bandingkan Oktober 2026
+# sebelum dan sesudah 14 Oktober
+
+perbandingan_oktober <- aqms_temporal_ug %>%
+  filter(
+    tahun == 2026,
+    bulan_angka == 10
+  ) %>%
+  mutate(
+    kelompok = if_else(
+      tanggal == as.Date("2026-10-14"),
+      "14 Oktober",
+      "Selain 14 Oktober"
+    )
+  ) %>%
+  group_by(kelompok) %>%
+  summarise(
+    jumlah_data = n(),
+    rata_pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    median_pm25 = median(pm25_ug_m3, na.rm = TRUE),
+    maksimum_pm25 = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(perbandingan_oktober)
+
+
+# 3. Tren bulanan dengan median
+# untuk melihat pola yang tidak terlalu
+# dipengaruhi nilai ekstrem
+
+tren_median <- aqms_temporal_ug %>%
+  group_by(periode = floor_date(waktu, "month")) %>%
+  summarise(
+    median_pm25 = median(pm25_ug_m3, na.rm = TRUE),
+    rata_pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+# 4. Grafik perbandingan mean dan median
+
+tren_median_long <- tren_median %>%
+  pivot_longer(
+    cols = c(rata_pm25, median_pm25),
+    names_to = "ukuran",
+    values_to = "konsentrasi"
+  )
+
+grafik_validasi <- ggplot(
+  tren_median_long,
+  aes(
+    x = periode,
+    y = konsentrasi,
+    color = ukuran
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Perbandingan Mean dan Median PM2.5",
+    x = "Bulan",
+    y = "PM2.5 (ug/m3)",
+    color = "Ukuran statistik"
+  ) +
+  theme_minimal()
+
+print(grafik_validasi)
+
+
+# 5. Simpan hasil validasi
+
+write_xlsx(
+  list(
+    "Lonjakan_14_Oktober" = lonjakan_14okt,
+    "Perbandingan_Oktober" = perbandingan_oktober,
+    "Tren_Mean_Median" = tren_median
+  ),
+  file.path(
+    folder_output,
+    "Validasi_Lonjakan_PM25.xlsx"
+  )
+)
+
+
+# ============================================================
+# ANALISIS LANJUTAN: POLA HARIAN AGUSTUS-OKTOBER 2026
+# ============================================================
+
+# 1. Ringkasan PM2.5 per hari dan stasiun
+
+harian_pm25 <- aqms_temporal_ug %>%
+  
+  filter(
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  ) %>%
+  
+  group_by(
+    station_file,
+    tanggal
+  ) %>%
+  
+  summarise(
+    
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    maksimum_pm25 = max(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    jumlah_pengamatan = n(),
+    
+    .groups = "drop"
+  )
+
+# 2. Tren harian gabungan
+
+tren_harian <- harian_pm25 %>%
+  
+  group_by(tanggal) %>%
+  
+  summarise(
+    
+    rata_pm25 = mean(
+      rata_pm25,
+      na.rm = TRUE
+    ),
+    
+    median_pm25 = median(
+      rata_pm25,
+      na.rm = TRUE
+    ),
+    
+    jumlah_stasiun = n(),
+    
+    .groups = "drop"
+  )
+
+print(tren_harian, n = 20)
+
+
+# 3. Grafik tren harian
+
+grafik_harian <- ggplot(
+  tren_harian,
+  aes(
+    x = tanggal,
+    y = rata_pm25
+  )
+) +
+  
+  geom_line() +
+  
+  labs(
+    title = "Tren Harian PM2.5 Agustus-Oktober 2026",
+    x = "Tanggal",
+    y = "Rata-rata PM2.5 (ug/m3)"
+  ) +
+  
+  theme_minimal()
+
+print(grafik_harian)
+
+
+# 4. Periksa Palangka Raya dan Sampit
+
+dua_stasiun <- harian_pm25 %>%
+  
+  filter(
+    str_detect(
+      station_file,
+      "PalangkaRaya|Sampit"
+    )
+  )
+
+grafik_dua_stasiun <- ggplot(
+  dua_stasiun,
+  aes(
+    x = tanggal,
+    y = rata_pm25,
+    color = station_file
+  )
+) +
+  
+  geom_line(linewidth = 0.8) +
+  
+  labs(
+    title = "Perbandingan Tren PM2.5 Palangka Raya dan Sampit",
+    x = "Tanggal",
+    y = "Rata-rata PM2.5 (ug/m3)",
+    color = "Stasiun"
+  ) +
+  
+  theme_minimal()
+
+print(grafik_dua_stasiun)
+
+
+# 5. Simpan hasil
+
+write_xlsx(
+  list(
+    "PM25_Harian_Per_Stasiun" = harian_pm25,
+    "Tren_Harian_Gabungan" = tren_harian,
+    "PalangkaRaya_Sampit" = dua_stasiun
+  ),
+  file.path(
+    folder_output,
+    "Analisis_Lanjutan_PM25_Harian.xlsx"
+  )
+)
+
+ggsave(
+  file.path(
+    folder_output,
+    "Grafik_PM25_Harian.png"
+  ),
+  grafik_harian,
+  width = 11,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  file.path(
+    folder_output,
+    "Grafik_PalangkaRaya_Sampit.png"
+  ),
+  grafik_dua_stasiun,
+  width = 11,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# INVESTIGASI ANOMALI PALANGKA RAYA DAN SAMPIT
+# ============================================================
+
+# 1. Ambil data kedua stasiun dari data mentah
+
+cek_dua_stasiun <- aqms_raw %>%
+  filter(
+    str_detect(
+      station_file,
+      "PalangkaRaya|Sampit"
+    )
+  ) %>%
+  mutate(
+    tanggal = as.Date(
+      ymd_hms(
+        timestamp_start,
+        quiet = TRUE
+      )
+    )
+  ) %>%
+  filter(
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  )
+
+# 2. Ringkasan seluruh polutan per bulan
+
+ringkasan_polutan <- cek_dua_stasiun %>%
+  mutate(
+    bulan = floor_date(
+      ymd_hms(timestamp_start, quiet = TRUE),
+      unit = "month"
+    )
+  ) %>%
+  group_by(
+    station_file,
+    bulan
+  ) %>%
+  summarise(
+    PM25 = mean(
+      as.numeric(pm25_ug_m3),
+      na.rm = TRUE
+    ),
+    PM10 = mean(
+      as.numeric(pm10_ug_m3),
+      na.rm = TRUE
+    ),
+    SO2 = mean(
+      as.numeric(so2_ug_m3),
+      na.rm = TRUE
+    ),
+    CO = mean(
+      as.numeric(co_ug_m3),
+      na.rm = TRUE
+    ),
+    O3 = mean(
+      as.numeric(o3_ug_m3),
+      na.rm = TRUE
+    ),
+    NO2 = mean(
+      as.numeric(no2_ug_m3),
+      na.rm = TRUE
+    ),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(ringkasan_polutan, n = Inf)
+
+
+# 3. Periksa distribusi PM2.5 per bulan
+
+distribusi_pm25 <- cek_dua_stasiun %>%
+  mutate(
+    bulan = floor_date(
+      ymd_hms(timestamp_start, quiet = TRUE),
+      unit = "month"
+    ),
+    pm25 = as.numeric(pm25_ug_m3)
+  ) %>%
+  group_by(
+    station_file,
+    bulan
+  ) %>%
+  summarise(
+    minimum = min(pm25, na.rm = TRUE),
+    Q1 = quantile(pm25, 0.25, na.rm = TRUE),
+    median = median(pm25, na.rm = TRUE),
+    Q3 = quantile(pm25, 0.75, na.rm = TRUE),
+    maksimum = max(pm25, na.rm = TRUE),
+    simpangan_baku = sd(pm25, na.rm = TRUE),
+    jumlah_data = sum(!is.na(pm25)),
+    .groups = "drop"
+  )
+
+print(distribusi_pm25, n = Inf)
+
+
+# 4. Periksa QC flag per bulan
+
+cek_qc_bulanan <- cek_dua_stasiun %>%
+  mutate(
+    bulan = floor_date(
+      ymd_hms(timestamp_start, quiet = TRUE),
+      unit = "month"
+    )
+  ) %>%
+  count(
+    station_file,
+    bulan,
+    qc_flag
+  )
+
+print(cek_qc_bulanan, n = Inf)
+
+
+# 5. Simpan hasil investigasi
+
+write_xlsx(
+  list(
+    "Ringkasan_Polutan" = ringkasan_polutan,
+    "Distribusi_PM25" = distribusi_pm25,
+    "QC_Bulanan" = cek_qc_bulanan
+  ),
+  file.path(
+    folder_output,
+    "Investigasi_Anomali_Palangka_Sampit.xlsx"
+  )
+)
+
+
+# ============================================================
+# TAHAP INVESTIGASI LANJUTAN
+# PALANGKA RAYA DAN SAMPIT
+# ============================================================
+
+library(tidyverse)
+library(lubridate)
+library(writexl)
+
+# 1. Ambil data kedua stasiun
+
+data_investigasi <- aqms_raw %>%
+  filter(
+    str_detect(
+      station_file,
+      "PalangkaRaya|Sampit"
+    )
+  ) %>%
+  mutate(
+    waktu = ymd_hms(
+      timestamp_start,
+      tz = "UTC",
+      quiet = TRUE
+    ),
+    tanggal = as.Date(waktu),
+    pm25 = as.numeric(pm25_ug_m3),
+    pm10 = as.numeric(pm10_ug_m3),
+    co = as.numeric(co_ug_m3)
+  ) %>%
+  filter(
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  )
+
+
+# 2. Bandingkan data semua QC dan hanya VALID
+
+perbandingan_qc <- data_investigasi %>%
+  filter(
+    !is.na(pm25)
+  ) %>%
+  group_by(
+    station_file,
+    bulan = floor_date(waktu, "month"),
+    qc_flag
+  ) %>%
+  summarise(
+    jumlah = n(),
+    rata_pm25 = mean(pm25, na.rm = TRUE),
+    median_pm25 = median(pm25, na.rm = TRUE),
+    rata_pm10 = mean(pm10, na.rm = TRUE),
+    rata_co = mean(co, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(perbandingan_qc, n = Inf)
+
+
+# 3. Periksa perubahan nilai di sekitar
+# 1 September dan 1 Oktober
+
+cek_titik_perubahan <- data_investigasi %>%
+  filter(
+    tanggal >= as.Date("2026-08-30"),
+    tanggal <= as.Date("2026-10-02")
+  ) %>%
+  filter(
+    tanggal %in% as.Date(c(
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02"
+    ))
+  ) %>%
+  group_by(
+    station_file,
+    tanggal
+  ) %>%
+  summarise(
+    rata_pm25 = mean(pm25, na.rm = TRUE),
+    rata_pm10 = mean(pm10, na.rm = TRUE),
+    rata_co = mean(co, na.rm = TRUE),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(cek_titik_perubahan, n = Inf)
+
+
+# 4. Periksa apakah sensor berubah
+
+perubahan_sensor <- data_investigasi %>%
+  group_by(
+    station_file,
+    sensor_id
+  ) %>%
+  summarise(
+    tanggal_awal = min(tanggal, na.rm = TRUE),
+    tanggal_akhir = max(tanggal, na.rm = TRUE),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(perubahan_sensor, n = Inf)
+
+
+# 5. Simpan hasil
+
+write_xlsx(
+  list(
+    "Perbandingan_QC" = perbandingan_qc,
+    "Titik_Perubahan" = cek_titik_perubahan,
+    "Pergantian_Sensor" = perubahan_sensor
+  ),
+  file.path(
+    folder_output,
+    "Investigasi_Lanjutan_Polusi.xlsx"
+  )
+)
+
+
+
+# ============================================================
+# PEMERIKSAAN LONJAKAN ANTARSTASIUN DI KALIMANTAN
+# ============================================================
+
+# 1. Pilih stasiun Kalimantan
+
+stasiun_kalimantan <- aqms_raw %>%
+  filter(
+    str_detect(
+      station_file,
+      "PalangkaRaya|Sampit|PangkalanBun|Sintang|Samarinda|Banjarbaru|Banjarmasin"
+    )
+  ) %>%
+  mutate(
+    waktu = ymd_hms(
+      timestamp_start,
+      tz = "UTC",
+      quiet = TRUE
+    ),
+    tanggal = as.Date(waktu),
+    pm25 = as.numeric(pm25_ug_m3)
+  )
+
+# 2. Hitung rata-rata per stasiun
+# pada tanggal sekitar perubahan
+
+perbandingan_kalimantan <- stasiun_kalimantan %>%
+  filter(
+    tanggal %in% as.Date(c(
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02"
+    ))
+  ) %>%
+  group_by(
+    station_file,
+    tanggal
+  ) %>%
+  summarise(
+    rata_pm25 = mean(
+      pm25,
+      na.rm = TRUE
+    ),
+    jumlah_data = sum(!is.na(pm25)),
+    .groups = "drop"
+  ) %>%
+  arrange(station_file, tanggal)
+
+print(
+  perbandingan_kalimantan,
+  n = Inf
+)
+
+# 3. Simpan hasil
+
+write_xlsx(
+  list(
+    "Perbandingan_Kalimantan" =
+      perbandingan_kalimantan
+  ),
+  file.path(
+    folder_output,
+    "Pemeriksaan_Lonjakan_Kalimantan.xlsx"
+  )
+)
+
+
+
+# ============================================================
+# EDA 3.3 - SPATIAL ANALYSIS
+# ============================================================
+
+library(tidyverse)
+library(readr)
+library(writexl)
+
+# 1. Baca data lokasi stasiun
+
+sites <- read_csv(
+  file.path(
+    folder_data,
+    "sites.csv"
+  ),
+  show_col_types = FALSE
+)
+
+# 2. Periksa struktur data lokasi
+
+glimpse(sites)
+
+# 3. Periksa nama kolom
+
+names(sites)
+
+# 4. Periksa beberapa baris
+
+print(sites, n = 10)
+
+# 5. Ringkasan konsentrasi per stasiun
+
+ringkasan_spasial <- aqms_temporal_ug %>%
+  
+  group_by(station_file) %>%
+  
+  summarise(
+    
+    rata_pm25 = mean(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    median_pm25 = median(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    maksimum_pm25 = max(
+      pm25_ug_m3,
+      na.rm = TRUE
+    ),
+    
+    jumlah_pengamatan = n(),
+    
+    .groups = "drop"
+  )
+
+# 6. Gabungkan dengan informasi lokasi
+# Nanti kunci penggabungan disesuaikan
+# berdasarkan nama kolom yang tersedia
+
+print(ringkasan_spasial, n = Inf)
+
+
+# ============================================================
+# EDA 3.3 - PENGGABUNGAN DATA SPASIAL
+# ============================================================
+
+library(tidyverse)
+library(writexl)
+
+# 1. Membuat kode stasiun dari station_file
+
+ringkasan_spasial <- ringkasan_spasial %>%
+  mutate(
+    station_code = str_extract(
+      station_file,
+      "^[^_]+"
+    )
+  )
+
+# 2. Memastikan kode stasiun sudah benar
+
+print(
+  ringkasan_spasial %>%
+    select(
+      station_file,
+      station_code
+    ),
+  n = Inf
+)
+
+# 3. Menggabungkan dengan sites
+
+data_spasial <- ringkasan_spasial %>%
+  left_join(
+    sites,
+    by = "station_code"
+  )
+
+# 4. Memeriksa hasil penggabungan
+
+glimpse(data_spasial)
+
+# 5. Memeriksa lokasi yang belum cocok
+
+lokasi_tidak_cocok <- data_spasial %>%
+  filter(is.na(location_id)) %>%
+  select(
+    station_file,
+    station_code
+  )
+
+print(lokasi_tidak_cocok)
+
+# 6. Menampilkan hasil penggabungan
+
+print(
+  data_spasial %>%
+    select(
+      station_code,
+      provinsi,
+      kota_kabupaten,
+      karakteristik_wilayah,
+      latitude_dd,
+      longitude_dd,
+      rata_pm25,
+      median_pm25,
+      jumlah_pengamatan,
+      site_type,
+      distance_to_road_m,
+      traffic_intensity_per_h
+    ),
+  n = Inf
+)
+
+
+unique(ringkasan_spasial$station_code)
+unique(sites$station_code)
+unique(sites$location_id)
+sites %>%
+  select(
+    location_id,
+    station_code,
+    provinsi,
+    kota_kabupaten
+  ) %>%
+  print(n = Inf)
+
+
+# Menambahkan awalan AQMS- pada kode stasiun
+ringkasan_spasial <- ringkasan_spasial %>%
+  mutate(
+    station_code = paste0("AQMS-", station_code)
+  )
+
+# Periksa hasilnya
+unique(ringkasan_spasial$station_code)
+data_spasial <- ringkasan_spasial %>%
+  left_join(
+    sites,
+    by = "station_code"
+  )
+
+# Periksa hasil
+glimpse(data_spasial)
+
+lokasi_tidak_cocok <- data_spasial %>%
+  filter(is.na(location_id)) %>%
+  select(
+    station_file,
+    station_code
+  )
+
+print(lokasi_tidak_cocok, n = Inf)
+
+# Hitung jumlah lokasi yang berhasil dicocokkan
+cat(
+  "Lokasi berhasil:",
+  sum(!is.na(data_spasial$location_id)),
+  "\n"
+)
+
+cat(
+  "Lokasi tidak cocok:",
+  sum(is.na(data_spasial$location_id)),
+  "\n"
+)
+
+
+data_spasial %>%
+  select(
+    station_code,
+    provinsi,
+    kota_kabupaten,
+    karakteristik_wilayah,
+    latitude_dd,
+    longitude_dd,
+    rata_pm25,
+    median_pm25,
+    jumlah_pengamatan,
+    site_type,
+    distance_to_road_m,
+    traffic_intensity_per_h
+  ) %>%
+  print(n = Inf)
+
+
+# Korelasi PM2.5 dengan intensitas lalu lintas
+cor_traffic <- cor.test(
+  data_spasial$rata_pm25,
+  data_spasial$traffic_intensity_per_h,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_traffic)
+
+
+# Korelasi PM2.5 dengan jarak jalan
+cor_road <- cor.test(
+  data_spasial$rata_pm25,
+  data_spasial$distance_to_road_m,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_road)
+
+
+# Korelasi PM2.5 dengan baseline PM2.5
+cor_baseline <- cor.test(
+  data_spasial$rata_pm25,
+  data_spasial$baseline_pm25,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_baseline)
+
+
+grafik_traffic <- ggplot(
+  data_spasial,
+  aes(
+    x = traffic_intensity_per_h,
+    y = rata_pm25
+  )
+) +
+  geom_point(size = 3) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE
+  ) +
+  labs(
+    title = "Hubungan Intensitas Lalu Lintas dan PM2.5",
+    x = "Intensitas Lalu Lintas per Jam",
+    y = "Rata-rata PM2.5 (µg/m³)"
+  ) +
+  theme_minimal()
+
+print(grafik_traffic)
+
+grafik_jarak <- ggplot(
+  data_spasial,
+  aes(
+    x = distance_to_road_m,
+    y = rata_pm25
+  )
+) +
+  geom_point(size = 3) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE
+  ) +
+  labs(
+    title = "Hubungan Jarak Jalan dan PM2.5",
+    x = "Jarak dari Jalan (meter)",
+    y = "Rata-rata PM2.5 (µg/m³)"
+  ) +
+  theme_minimal()
+
+print(grafik_jarak)
+
+write_xlsx(
+  list(
+    "Data_Spasial" = data_spasial,
+    "Lokasi_Tidak_Cocok" = lokasi_tidak_cocok
+  ),
+  file.path(
+    folder_output,
+    "Hasil_EDA_Spasial.xlsx"
+  )
+)
+
+# Korelasi median PM2.5 dengan lalu lintas
+cor_traffic_median <- cor.test(
+  data_spasial$median_pm25,
+  data_spasial$traffic_intensity_per_h,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_traffic_median)
+
+
+# Korelasi median PM2.5 dengan jarak jalan
+cor_road_median <- cor.test(
+  data_spasial$median_pm25,
+  data_spasial$distance_to_road_m,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_road_median)
+
+
+# Korelasi median PM2.5 dengan baseline
+cor_baseline_median <- cor.test(
+  data_spasial$median_pm25,
+  data_spasial$baseline_pm25,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(cor_baseline_median)
+
+# Periksa ringkasan nilai PM2.5 Palangka Raya dan Sampit
+aqms_analysis %>%
+  filter(
+    str_detect(
+      station_file,
+      "PalangkaRaya|Sampit"
+    )
+  ) %>%
+  group_by(station_file) %>%
+  summarise(
+    jumlah_data = n(),
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    jumlah_diatas_100 = sum(
+      pm25_ug_m3 > 100,
+      na.rm = TRUE
+    ),
+    jumlah_diatas_500 = sum(
+      pm25_ug_m3 > 500,
+      na.rm = TRUE
+    )
+  )
+
+# Ringkasan PM2.5 Palangka Raya dan Sampit
+
+cek_ekstrem <- aqms_analysis %>%
+  filter(
+    str_detect(station_file, "PalangkaRaya|Sampit")
+  ) %>%
+  group_by(station_file) %>%
+  summarise(
+    jumlah_data = n(),
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    diatas_100 = sum(pm25_ug_m3 > 100, na.rm = TRUE),
+    diatas_500 = sum(pm25_ug_m3 > 500, na.rm = TRUE)
+  )
+
+print(cek_ekstrem)
+
+aqms_analysis %>%
+  filter(
+    str_detect(station_file, "PalangkaRaya|Sampit"),
+    pm25_ug_m3 > 500
+  ) %>%
+  select(
+    station_file,
+    timestamp_start,
+    pm25_ug_m3,
+    qc_flag
+  ) %>%
+  arrange(desc(pm25_ug_m3)) %>%
+  print(n = 30)
+
+
+# Menghitung nilai PM2.5 ekstrem per tanggal
+
+ekstrem_harian <- aqms_analysis %>%
+  filter(
+    str_detect(station_file, "PalangkaRaya|Sampit"),
+    pm25_ug_m3 > 500
+  ) %>%
+  mutate(
+    tanggal = as.Date(timestamp_start)
+  ) %>%
+  group_by(station_file, tanggal) %>%
+  summarise(
+    jumlah_pengamatan = n(),
+    rata_rata_pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    maksimum_pm25 = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(tanggal)
+
+print(ekstrem_harian, n = Inf)
+
+# Membandingkan kedua stasiun berdasarkan waktu
+
+perbandingan_lonjakan <- aqms_analysis %>%
+  filter(
+    str_detect(station_file, "PalangkaRaya|Sampit"),
+    as.Date(timestamp_start) == as.Date("2026-10-14")
+  ) %>%
+  select(
+    station_file,
+    timestamp_start,
+    pm25_ug_m3,
+    qc_flag
+  ) %>%
+  arrange(timestamp_start, station_file)
+
+print(perbandingan_lonjakan, n = 100)
+
+cek_seluruh_stasiun <- aqms_analysis %>%
+  filter(
+    as.Date(timestamp_start) >= as.Date("2026-10-01"),
+    as.Date(timestamp_start) <= as.Date("2026-10-14")
+  ) %>%
+  group_by(station_file, tanggal = as.Date(timestamp_start)) %>%
+  summarise(
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    minimum = min(pm25_ug_m3, na.rm = TRUE),
+    jumlah_data = n(),
+    .groups = "drop"
+  )
+
+print(cek_seluruh_stasiun, n = Inf)
+
+aqms_analysis %>%
+  filter(
+    str_detect(station_file, "PalangkaRaya|Sampit"),
+    as.Date(timestamp_start) >= as.Date("2026-10-10")
+  ) %>%
+  group_by(station_file, tanggal = as.Date(timestamp_start)) %>%
+  summarise(
+    PM25 = mean(pm25_ug_m3, na.rm = TRUE),
+    PM10 = mean(pm10_ug_m3, na.rm = TRUE),
+    SO2 = mean(so2_ug_m3, na.rm = TRUE),
+    CO = mean(co_ug_m3, na.rm = TRUE),
+    O3 = mean(o3_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  print(n = Inf)
+
+cek_seluruh_stasiun <- aqms_analysis %>%
+  filter(
+    as.Date(timestamp_start) >= as.Date("2026-10-01"),
+    as.Date(timestamp_start) <= as.Date("2026-10-14")
+  ) %>%
+  group_by(
+    station_file,
+    tanggal = as.Date(timestamp_start)
+  ) %>%
+  summarise(
+    jumlah_pengamatan = n(),
+    jumlah_pm25_tersedia = sum(!is.na(pm25_ug_m3)),
+    
+    rata_rata = ifelse(
+      sum(!is.na(pm25_ug_m3)) > 0,
+      mean(pm25_ug_m3, na.rm = TRUE),
+      NA_real_
+    ),
+    
+    median = ifelse(
+      sum(!is.na(pm25_ug_m3)) > 0,
+      median(pm25_ug_m3, na.rm = TRUE),
+      NA_real_
+    ),
+    
+    maksimum = ifelse(
+      sum(!is.na(pm25_ug_m3)) > 0,
+      max(pm25_ug_m3, na.rm = TRUE),
+      NA_real_
+    ),
+    
+    minimum = ifelse(
+      sum(!is.na(pm25_ug_m3)) > 0,
+      min(pm25_ug_m3, na.rm = TRUE),
+      NA_real_
+    ),
+    
+    .groups = "drop"
+  )
+
+print(cek_seluruh_stasiun, n = Inf)
+
+cek_interval <- aqms_analysis %>%
+  arrange(station_file, timestamp_start) %>%
+  group_by(station_file) %>%
+  mutate(
+    selisih_menit = as.numeric(
+      difftime(
+        timestamp_start,
+        lag(timestamp_start),
+        units = "mins"
+      )
+    )
+  ) %>%
+  summarise(
+    jumlah_data = n(),
+    median_interval_menit = median(
+      selisih_menit,
+      na.rm = TRUE
+    ),
+    interval_minimum = min(
+      selisih_menit,
+      na.rm = TRUE
+    ),
+    interval_maksimum = max(
+      selisih_menit,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+print(cek_interval, n = Inf)
+
+cek_missing_pm25 <- aqms_analysis %>%
+  group_by(station_file) %>%
+  summarise(
+    total_data = n(),
+    data_pm25_tersedia = sum(!is.na(pm25_ug_m3)),
+    data_pm25_kosong = sum(is.na(pm25_ug_m3)),
+    persentase_kosong = mean(is.na(pm25_ug_m3)) * 100,
+    .groups = "drop"
+  )
+
+print(cek_missing_pm25, n = Inf)
+
+# Stasiun yang perlu diperiksa
+stasiun_masalah <- c(
+  "BJB-01_Banjarbaru_AQMS",
+  "MDN-01_Medan_AQMS",
+  "PSW-01_Pesawaran_AQMS"
+)
+
+# Tampilkan nama kolom setiap file
+for (stasiun in stasiun_masalah) {
+  
+  cat("\n====================================\n")
+  cat("STASIUN:", stasiun, "\n")
+  cat("====================================\n")
+  
+  print(names(data_aqms_list[[stasiun]]))
+}
+
+head(data_aqms_list[["BJB-01_Banjarbaru_AQMS"]])
+head(data_aqms_list[["MDN-01_Medan_AQMS"]])
+head(data_aqms_list[["PSW-01_Pesawaran_AQMS"]])
+
+# Membaca metadata sensor
+metadata_sensor <- read_csv(
+  file.path(folder_data, "metadata", "metadata_sensors.csv"),
+  show_col_types = FALSE
+)
+
+# Melihat informasi PM2.5
+metadata_sensor %>%
+  filter(str_detect(
+    tolower(paste(Parameters, Header, Units)),
+    "pm25|pm2.5"
+  )) %>%
+  print(n = Inf)
+
+# Cek tipe data dan ringkasan PM2.5
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data <- data_aqms_list[[stasiun]]
+  
+  print(class(data$pm25_ppm))
+  
+  print(summary(
+    as.numeric(data$pm25_ppm)
+  ))
+}
+
+
+metadata_sensor %>%
+  filter(
+    str_detect(
+      tolower(paste(Parameters, Header, Units)),
+      "pm25|pm2.5"
+    )
+  ) %>%
+  select(
+    Supplier,
+    Sensors,
+    Type,
+    Parameters,
+    Header,
+    Units
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Cek sensor ID pada ketiga stasiun
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data_aqms_list[[stasiun]] %>%
+    count(sensor_id, qc_flag) %>%
+    print(n = Inf)
+}
+
+# Cek metadata sensor berdasarkan sensor ID
+sensors %>%
+  filter(sensor_id %in% c("SENS-026", "SENS-024", "SENS-022")) %>%
+  print(n = Inf, width = Inf)
+
+ls()
+# Cari lokasi file sensors.csv
+list.files(
+  path = folder_data,
+  pattern = "sensors\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+sensors_raw <- read_csv(
+  "C:\\Users\\Portege\\Downloads\\Dataset Gelar Rasa/sensors.csv",
+  show_col_types = FALSE
+)
+
+glimpse(sensors_raw)
+sensors_raw %>%
+  filter(
+    sensor_id %in% c("SENS-026", "SENS-024", "SENS-022")
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Periksa seluruh metadata ketiga sensor
+sensors_raw %>%
+  filter(
+    sensor_id %in% c("SENS-026", "SENS-024", "SENS-022")
+  ) %>%
+  select(
+    sensor_id,
+    location_id,
+    nama_sensor,
+    model_sensor,
+    tipe_pemasangan,
+    status_operasional,
+    region_group
+  ) %>%
+  print(n = Inf, width = Inf)
+
+sites %>%
+  filter(
+    location_id %in% c("LOC-BJB-01", "LOC-MDN-01", "LOC-PSW-01")
+  ) %>%
+  select(
+    location_id,
+    station_code,
+    pm25_equipment,
+    pm25_unit,
+    notes
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Ringkasan PM2.5 tiga stasiun berformat ppm
+
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data <- data_aqms_list[[stasiun]]
+  
+  nilai <- as.numeric(data$pm25_ppm)
+  
+  print(
+    quantile(
+      nilai,
+      probs = c(0, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1),
+      na.rm = TRUE
+    )
+  )
+}
+
+# Ringkasan PM2.5 berdasarkan QC
+
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data_aqms_list[[stasiun]] %>%
+    mutate(
+      pm25_num = as.numeric(pm25_ppm)
+    ) %>%
+    group_by(qc_flag) %>%
+    summarise(
+      jumlah = n(),
+      
+      rata_rata = if (all(is.na(pm25_num))) NA_real_
+      else mean(pm25_num, na.rm = TRUE),
+      
+      median = if (all(is.na(pm25_num))) NA_real_
+      else median(pm25_num, na.rm = TRUE),
+      
+      maksimum = if (all(is.na(pm25_num))) NA_real_
+      else max(pm25_num, na.rm = TRUE),
+      
+      .groups = "drop"
+    ) %>%
+    print(n = Inf)
+}
+
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data_aqms_list[[stasiun]] %>%
+    mutate(
+      pm25_num = as.numeric(pm25_ppm)
+    ) %>%
+    filter(
+      qc_flag == "VALID",
+      !is.na(pm25_num)
+    ) %>%
+    arrange(desc(pm25_num)) %>%
+    select(
+      timestamp_start,
+      pm25_num,
+      qc_flag
+    ) %>%
+    print(n = 10)
+}
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data_aqms_list[[stasiun]] %>%
+    mutate(
+      pm25_num = as.numeric(pm25_ppm)
+    ) %>%
+    filter(
+      qc_flag == "VALID",
+      !is.na(pm25_num)
+    ) %>%
+    count(pm25_num, sort = TRUE) %>%
+    print(n = 10)
+}
+
+data_bjb <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    pm25_num = as.numeric(pm25_ppm),
+    tanggal = as.Date(timestamp_start)
+  ) %>%
+  filter(qc_flag == "VALID")
+
+# Frekuensi nilai PM2.5 per bulan
+pola_bjb <- data_bjb %>%
+  mutate(
+    bulan = format(tanggal, "%Y-%m")
+  ) %>%
+  group_by(bulan) %>%
+  summarise(
+    jumlah_data = n(),
+    jumlah_0337 = sum(pm25_num == 0.3367, na.rm = TRUE),
+    jumlah_00035 = sum(pm25_num == 0.0035, na.rm = TRUE),
+    rata_rata = mean(pm25_num, na.rm = TRUE),
+    median = median(pm25_num, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(pola_bjb, n = Inf)
+
+data_bjb %>%
+  arrange(timestamp_start) %>%
+  mutate(
+    kelompok_nilai = case_when(
+      pm25_num == 0.3367 ~ "Nilai tinggi",
+      pm25_num == 0.0035 ~ "Nilai rendah",
+      TRUE ~ "Nilai lainnya"
+    )
+  ) %>%
+  select(
+    timestamp_start,
+    pm25_num,
+    kelompok_nilai
+  ) %>%
+  print(n = 50)
+
+data_bjb <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    pm25_num = as.numeric(pm25_ppm),
+    tanggal = as.Date(timestamp_start)
+  ) %>%
+  filter(qc_flag == "VALID")
+
+# Frekuensi nilai PM2.5 per bulan
+pola_bjb <- data_bjb %>%
+  mutate(
+    bulan = format(tanggal, "%Y-%m")
+  ) %>%
+  group_by(bulan) %>%
+  summarise(
+    jumlah_data = n(),
+    jumlah_0337 = sum(pm25_num == 0.3367, na.rm = TRUE),
+    jumlah_00035 = sum(pm25_num == 0.0035, na.rm = TRUE),
+    rata_rata = mean(pm25_num, na.rm = TRUE),
+    median = median(pm25_num, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(pola_bjb, n = Inf)
+
+data_bjb %>%
+  arrange(timestamp_start) %>%
+  mutate(
+    kelompok_nilai = case_when(
+      pm25_num == 0.3367 ~ "Nilai tinggi",
+      pm25_num == 0.0035 ~ "Nilai rendah",
+      TRUE ~ "Nilai lainnya"
+    )
+  ) %>%
+  select(
+    timestamp_start,
+    pm25_num,
+    kelompok_nilai
+  ) %>%
+  print(n = 50)
+
+library(dplyr)
+library(lubridate)
+
+pola_berulang_bjb <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    pm25_num = as.numeric(pm25_ppm),
+    waktu = ymd_hms(timestamp_start)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(pm25_num)
+  ) %>%
+  arrange(waktu) %>%
+  mutate(
+    nilai_sama = pm25_num == lag(pm25_num),
+    kelompok = cumsum(
+      is.na(nilai_sama) | !nilai_sama
+    )
+  ) %>%
+  group_by(kelompok, pm25_num) %>%
+  summarise(
+    waktu_awal = min(waktu),
+    waktu_akhir = max(waktu),
+    jumlah_pengamatan = n(),
+    durasi_jam = as.numeric(
+      difftime(max(waktu), min(waktu), units = "hours")
+    ),
+    .groups = "drop"
+  ) %>%
+  filter(jumlah_pengamatan >= 6) %>%
+  arrange(desc(jumlah_pengamatan))
+
+print(pola_berulang_bjb, n = 30)
+
+bjb_cek <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    pm25_num = as.numeric(pm25_ppm),
+    waktu = lubridate::ymd_hms(timestamp_start)
+  ) %>%
+  filter(qc_flag == "VALID") %>%
+  arrange(waktu)
+
+# Periksa 5 pengamatan sebelum dan sesudah
+# perubahan nilai pada 29 Maret 2025
+
+bjb_cek %>%
+  filter(
+    waktu >= ymd_hms("2025-03-29 09:00:00"),
+    waktu <= ymd_hms("2025-03-29 19:00:00")
+  ) %>%
+  select(waktu, pm25_num, qc_flag) %>%
+  print(n = Inf)
+
+bjb_cek %>%
+  mutate(
+    selisih_jam = as.numeric(
+      difftime(waktu, lag(waktu), units = "hours")
+    )
+  ) %>%
+  summarise(
+    minimum = min(selisih_jam, na.rm = TRUE),
+    maksimum = max(selisih_jam, na.rm = TRUE),
+    median = median(selisih_jam, na.rm = TRUE),
+    jumlah_selain_1_jam = sum(
+      selisih_jam != 1,
+      na.rm = TRUE
+    )
+  )
+
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data <- data_aqms_list[[stasiun]]
+  
+  data %>%
+    mutate(
+      pm25_num = as.numeric(pm25_ppm)
+    ) %>%
+    filter(
+      qc_flag == "VALID",
+      !is.na(pm25_num)
+    ) %>%
+    count(pm25_num, sort = TRUE) %>%
+    mutate(
+      persentase = round(
+        n / sum(n) * 100, 2
+      )
+    ) %>%
+    print(n = 10)
+}
+
+for (stasiun in stasiun_masalah) {
+  
+  cat("\nSTASIUN:", stasiun, "\n")
+  
+  data <- data_aqms_list[[stasiun]] %>%
+    mutate(
+      pm25_num = as.numeric(pm25_ppm),
+      waktu = lubridate::ymd_hms(timestamp_start)
+    ) %>%
+    filter(
+      qc_flag == "VALID",
+      !is.na(pm25_num)
+    ) %>%
+    arrange(waktu) %>%
+    mutate(
+      nilai_sama = pm25_num == lag(pm25_num),
+      kelompok = cumsum(
+        is.na(nilai_sama) | !nilai_sama
+      )
+    ) %>%
+    group_by(kelompok, pm25_num) %>%
+    summarise(
+      jumlah_pengamatan = n(),
+      waktu_awal = min(waktu),
+      waktu_akhir = max(waktu),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(jumlah_pengamatan))
+  
+  print(head(data, 5))
+}
+
+bjb_audit <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    waktu = lubridate::ymd_hms(timestamp_start),
+    pm25_num = as.numeric(pm25_ppm),
+    status_anomali = case_when(
+      waktu >= lubridate::ymd_hms("2024-09-07 00:01:15") &
+        waktu <= lubridate::ymd_hms("2025-07-09 08:01:15") &
+        qc_flag == "VALID" &
+        pm25_num %in% c(0.337, 0.0035) ~
+        "Periode nilai konstan",
+      TRUE ~ "Perlu pemeriksaan lain"
+    )
+  )
+
+bjb_audit %>%
+  count(status_anomali)
+
+bjb_audit <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  mutate(
+    waktu = lubridate::ymd_hms(timestamp_start),
+    pm25_num = as.numeric(pm25_ppm),
+    status_anomali = case_when(
+      
+      qc_flag == "VALID" &
+        waktu >= lubridate::ymd_hms("2024-09-07 00:01:15") &
+        waktu <= lubridate::ymd_hms("2025-03-29 13:01:15") &
+        pm25_num == 0.337 ~
+        "Nilai konstan 0.337",
+      
+      qc_flag == "VALID" &
+        waktu >= lubridate::ymd_hms("2025-03-29 14:01:15") &
+        waktu <= lubridate::ymd_hms("2025-07-09 08:01:15") &
+        pm25_num == 0.0035 ~
+        "Nilai konstan 0.0035",
+      
+      TRUE ~ "Lainnya"
+    )
+  )
+
+bjb_audit %>%
+  count(status_anomali)
+
+bjb_audit %>%
+  filter(
+    waktu >= lubridate::ymd_hms("2024-09-07 00:01:15"),
+    waktu <= lubridate::ymd_hms("2025-03-29 13:01:15")
+  ) %>%
+  summarise(
+    jumlah_baris = n(),
+    jumlah_valid = sum(qc_flag == "VALID", na.rm = TRUE),
+    jumlah_0337 = sum(pm25_num == 0.337, na.rm = TRUE),
+    jumlah_nilai_lain = sum(
+      pm25_num != 0.337 & !is.na(pm25_num),
+      na.rm = TRUE
+    ),
+    nilai_minimum = min(pm25_num, na.rm = TRUE),
+    nilai_maksimum = max(pm25_num, na.rm = TRUE)
+  )
+bjb_audit %>%
+  filter(
+    waktu >= lubridate::ymd_hms("2024-09-07 00:01:15"),
+    waktu <= lubridate::ymd_hms("2025-03-29 13:01:15")
+  ) %>%
+  count(pm25_num, qc_flag, sort = TRUE) %>%
+  print(n = 10)
+
+bjb_audit %>%
+  count(pm25_num, sort = TRUE) %>%
+  print(n = 5, width = Inf)
+
+bjb_audit %>%
+  filter(
+    waktu >= lubridate::ymd_hms("2024-09-07 00:01:15"),
+    waktu <= lubridate::ymd_hms("2025-03-29 13:01:16")
+  ) %>%
+  summarise(
+    jumlah_data = n(),
+    jumlah_0337 = sum(round(pm25_num, 3) == 0.337, na.rm = TRUE),
+    jumlah_nilai_lain = sum(round(pm25_num, 3) != 0.337, na.rm = TRUE),
+    nilai_minimum = min(pm25_num, na.rm = TRUE),
+    nilai_maksimum = max(pm25_num, na.rm = TRUE)
+  )
+
+# 1. Tentukan variabel yang akan diperiksa
+variabel_aqms <- c(
+  "pm25_ppm",
+  "pm10_ppm",
+  "so2_ppm",
+  "co_ppm",
+  "o3_ppm",
+  "no2_ppm",
+  "temperature_c",
+  "humidity_pct",
+  "wind_speed_ms",
+  "wind_direction_deg"
+)
+
+# 2. Ambil periode anomali PM2.5
+periode_bjb <- bjb_audit %>%
+  filter(
+    waktu >= lubridate::ymd_hms("2024-09-07 00:01:15"),
+    waktu <= lubridate::ymd_hms("2025-03-29 13:01:16")
+  ) %>%
+  mutate(
+    across(
+      all_of(variabel_aqms),
+      ~ as.numeric(.x)
+    )
+  )
+
+# 3. Periksa variasi setiap parameter
+hasil_pemeriksaan_bjb <- periode_bjb %>%
+  summarise(
+    across(
+      all_of(variabel_aqms),
+      list(
+        jumlah_unik = ~ n_distinct(.x, na.rm = TRUE),
+        minimum = ~ min(.x, na.rm = TRUE),
+        maksimum = ~ max(.x, na.rm = TRUE),
+        standar_deviasi = ~ sd(.x, na.rm = TRUE)
+      )
+    )
+  )
+
+print(hasil_pemeriksaan_bjb, width = Inf)
+
+bjb_audit %>%
+  mutate(
+    periode = case_when(
+      waktu < lubridate::ymd_hms("2024-09-07 00:01:15") ~ "Sebelum",
+      waktu <= lubridate::ymd_hms("2025-03-29 13:01:16") ~ "Selama",
+      TRUE ~ "Sesudah"
+    )
+  ) %>%
+  group_by(periode) %>%
+  summarise(
+    jumlah_data = n(),
+    PM25_unik = n_distinct(pm25_num, na.rm = TRUE),
+    PM25_min = min(pm25_num, na.rm = TRUE),
+    PM25_max = max(pm25_num, na.rm = TRUE),
+    PM25_sd = sd(pm25_num, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+hasil_anomali_semua <- purrr::imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    kolom_pm <- intersect(
+      c("pm25_ug_m3", "pm25_ppm"),
+      names(data)
+    )[1]
+    
+    if (is.na(kolom_pm)) return(NULL)
+    
+    nilai <- as.numeric(data[[kolom_pm]])
+    
+    tibble(
+      station_file = nama_stasiun,
+      satuan_kolom = kolom_pm,
+      jumlah_data = sum(!is.na(nilai)),
+      jumlah_nilai_unik = n_distinct(nilai, na.rm = TRUE),
+      minimum = min(nilai, na.rm = TRUE),
+      maksimum = max(nilai, na.rm = TRUE),
+      standar_deviasi = sd(nilai, na.rm = TRUE)
+    )
+  }
+)
+
+hasil_anomali_semua %>%
+  arrange(standar_deviasi) %>%
+  print(n = Inf)
+
+library(dplyr)
+library(purrr)
+library(tibble)
+
+audit_pm25_lanjutan <- imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    kolom_pm <- intersect(
+      c("pm25_ug_m3", "pm25_ppm"),
+      names(data)
+    )[1]
+    
+    if (is.na(kolom_pm)) return(NULL)
+    
+    nilai_asli <- data[[kolom_pm]]
+    nilai <- suppressWarnings(as.numeric(nilai_asli))
+    
+    tibble(
+      stasiun = nama_stasiun,
+      satuan = kolom_pm,
+      total_data = length(nilai),
+      missing_asli = sum(is.na(nilai_asli)),
+      gagal_konversi = sum(
+        !is.na(nilai_asli) & is.na(nilai)
+      ),
+      nilai_inf = sum(is.infinite(nilai), na.rm = TRUE),
+      nilai_negatif = sum(
+        nilai < 0 & is.finite(nilai),
+        na.rm = TRUE
+      ),
+      jumlah_nilai_unik = n_distinct(
+        nilai[is.finite(nilai)]
+      ),
+      minimum = if (any(is.finite(nilai))) {
+        min(nilai[is.finite(nilai)])
+      } else NA_real_,
+      maksimum = if (any(is.finite(nilai))) {
+        max(nilai[is.finite(nilai)])
+      } else NA_real_
+    )
+  }
+)
+
+audit_pm25_lanjutan %>%
+  print(n = Inf, width = Inf)
+
+# Stasiun yang perlu diperiksa
+stasiun_periksa <- c(
+  "JMB-02_MuaroJambi_AQMS",
+  "MER-01_Merauke_AQMS",
+  "PLB-01_TalangBetutu_AQMS",
+  "MDN-01_Medan_AQMS",
+  "SMR-01_Samarinda_AQMS"
+)
+
+# Periksa nama stasiun yang tersedia
+names(data_aqms_list)[
+  str_detect(
+    names(data_aqms_list),
+    "Muaro|Merauke|Talang|Medan|Samarinda"
+  )
+]
+
+for (stasiun in stasiun_periksa) {
+  
+  data <- data_aqms_list[[stasiun]]
+  
+  kolom_pm <- intersect(
+    c("pm25_ug_m3", "pm25_ppm"),
+    names(data)
+  )[1]
+  
+  nilai_asli <- data[[kolom_pm]]
+  nilai_num <- suppressWarnings(
+    as.numeric(nilai_asli)
+  )
+  
+  cat("\n============================\n")
+  cat("STASIUN:", stasiun, "\n")
+  cat("============================\n")
+  
+  # Data gagal dikonversi
+  cat("\nContoh data gagal konversi:\n")
+  
+  print(
+    data %>%
+      mutate(nilai_num = nilai_num) %>%
+      filter(
+        !is.na(.data[[kolom_pm]]),
+        is.na(nilai_num)
+      ) %>%
+      select(
+        timestamp_start,
+        all_of(kolom_pm),
+        qc_flag
+      ) %>%
+      head(10)
+  )
+  
+  # Nilai negatif dan tidak hingga
+  cat("\nContoh nilai negatif atau Inf:\n")
+  
+  print(
+    data %>%
+      mutate(nilai_num = nilai_num) %>%
+      filter(
+        !is.na(nilai_num),
+        nilai_num < 0 | !is.finite(nilai_num)
+      ) %>%
+      select(
+        timestamp_start,
+        all_of(kolom_pm),
+        qc_flag
+      ) %>%
+      head(10)
+  )
+}
+
+stasiun_periksa <- c(
+  "JMB-02_MuaroJambi_AQMS",
+  "MER-01_Merauke_AQMS",
+  "PLB-01_TalangBetutu_AQMS",
+  "MDN-01_Medan_AQMS",
+  "SM2-01_Samarinda_AQMS"
+)
+
+# Melihat 20 nilai PM2.5 tertinggi
+hasil_pm25_ekstrem <- purrr::imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    kolom_pm <- intersect(
+      c("pm25_ug_m3", "pm25_ppm"),
+      names(data)
+    )[1]
+    
+    if (is.na(kolom_pm)) return(NULL)
+    
+    data %>%
+      mutate(
+        pm25_num = as.numeric(.data[[kolom_pm]]),
+        stasiun = nama_stasiun
+      ) %>%
+      filter(
+        qc_flag == "VALID",
+        !is.na(pm25_num)
+      ) %>%
+      arrange(desc(pm25_num)) %>%
+      slice_head(n = 20) %>%
+      select(stasiun, timestamp_start, qc_flag, pm25_num)
+  }
+)
+
+hasil_pm25_ekstrem %>%
+  arrange(desc(pm25_num)) %>%
+  print(n = 30)
+
+audit_konversi <- purrr::imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    kolom_pm <- intersect(
+      c("pm25_ug_m3", "pm25_ppm"),
+      names(data)
+    )[1]
+    
+    if (is.na(kolom_pm)) return(NULL)
+    
+    nilai_asli <- data[[kolom_pm]]
+    nilai_num <- suppressWarnings(as.numeric(nilai_asli))
+    
+    tibble(
+      stasiun = nama_stasiun,
+      kolom = kolom_pm,
+      jumlah_gagal = sum(
+        !is.na(nilai_asli) & is.na(nilai_num)
+      )
+    )
+  }
+)
+
+audit_konversi %>%
+  filter(jumlah_gagal > 0) %>%
+  print(n = Inf)
+
+data_aqms_list[["KTG-01_Palangkaraya_AQMS"]] %>%
+  select(timestamp_start, pm25_ug_m3, qc_flag) %>%
+  arrange(desc(as.numeric(pm25_ug_m3))) %>%
+  print(n = 20)
+data_aqms_list[["KTG-02_Sampit_AQMS"]] %>%
+  select(timestamp_start, pm25_ug_m3, qc_flag) %>%
+  arrange(desc(as.numeric(pm25_ug_m3))) %>%
+  print(n = 20)
+
+data_aqms_list[["JMB-02_MuaroJambi_AQMS"]] %>%
+  filter(
+    !is.na(pm25_ug_m3),
+    is.na(suppressWarnings(as.numeric(pm25_ug_m3)))
+  ) %>%
+  count(pm25_ug_m3, sort = TRUE) %>%
+  print(n = 30)
+names(data_aqms_list) %>%
+  grep("Palangka|Sampit", ., value = TRUE)
+
+nama_palangka <- grep(
+  "Palangka",
+  names(data_aqms_list),
+  value = TRUE
+)
+
+nama_sampit <- grep(
+  "Sampit",
+  names(data_aqms_list),
+  value = TRUE
+)
+
+nama_palangka
+nama_sampit
+
+# Palangka Raya
+data_palangka <- data_aqms_list[[nama_palangka]] %>%
+  mutate(pm25_num = as.numeric(pm25_ug_m3)) %>%
+  filter(qc_flag == "VALID", !is.na(pm25_num)) %>%
+  arrange(desc(pm25_num))
+
+data_palangka %>%
+  select(timestamp_start, pm25_num, qc_flag) %>%
+  print(n = 20)
+
+
+# Sampit
+data_sampit <- data_aqms_list[[nama_sampit]] %>%
+  mutate(pm25_num = as.numeric(pm25_ug_m3)) %>%
+  filter(qc_flag == "VALID", !is.na(pm25_num)) %>%
+  arrange(desc(pm25_num))
+
+data_sampit %>%
+  select(timestamp_start, pm25_num, qc_flag) %>%
+  print(n = 20)
+
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Gabungkan data dua stasiun
+gabung_ekstrem <- bind_rows(
+  data_palangka %>%
+    mutate(stasiun = "Palangka Raya"),
+  
+  data_sampit %>%
+    mutate(stasiun = "Sampit")
+) %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start),
+    tanggal = as.Date(waktu)
+  ) %>%
+  filter(
+    tanggal >= as.Date("2026-10-10"),
+    tanggal <= as.Date("2026-10-14")
+  )
+
+# Ringkasan harian
+ringkasan_harian <- gabung_ekstrem %>%
+  group_by(stasiun, tanggal) %>%
+  summarise(
+    jumlah_data = n(),
+    PM25_rata_rata = mean(pm25_num, na.rm = TRUE),
+    PM25_maksimum = max(pm25_num, na.rm = TRUE),
+    PM25_minimum = min(pm25_num, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_harian, n = Inf)
+
+ggplot(
+  gabung_ekstrem,
+  aes(x = waktu, y = pm25_num, color = stasiun)
+) +
+  geom_line() +
+  geom_point(size = 1) +
+  labs(
+    title = "Pola PM2.5 Palangka Raya dan Sampit",
+    subtitle = "10–14 Oktober 2026",
+    x = "Waktu",
+    y = "PM2.5 (µg/m³)",
+    color = "Stasiun"
+  ) +
+  theme_minimal()
+
+pemeriksaan_14okt <- gabung_ekstrem %>%
+  filter(tanggal == as.Date("2026-10-14")) %>%
+  arrange(stasiun, waktu) %>%
+  select(
+    stasiun,
+    waktu,
+    pm25_num,
+    qc_flag
+  )
+
+print(pemeriksaan_14okt, n = 60)
+
+pemeriksaan_14okt %>%
+  count(stasiun, qc_flag)
+
+ggplot(
+  pemeriksaan_14okt,
+  aes(x = waktu, y = pm25_num, color = stasiun)
+) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Perubahan PM2.5 per Jam",
+    subtitle = "Palangka Raya dan Sampit, 14 Oktober 2026",
+    x = "Waktu",
+    y = "PM2.5",
+    color = "Stasiun"
+  ) +
+  theme_minimal()
+
+names(data_aqms_list[["KTG-01_Palangkaraya_AQMS"]])
+names(data_aqms_list[["KTG-02_Sampit_AQMS"]])
+grep(
+  "Palangka|KTG",
+  names(data_aqms_list),
+  value = TRUE,
+  ignore.case = TRUE
+)
+names(data_aqms_list[["KTG-01_Palangkaraya_AQMS"]])
+names(data_aqms_list[["KTG-02_Sampit_AQMS"]])
+
+# 1. Cek apakah nama tersebut benar-benar ada
+"KTG-01_Palangkaraya_AQMS" %in% names(data_aqms_list)
+
+# 2. Cek posisi Palangka Raya dalam list
+which(names(data_aqms_list) == "KTG-01_Palangkaraya_AQMS")
+
+# 3. Cek isi elemen datanya
+str(data_aqms_list[
+  which(names(data_aqms_list) == "KTG-01_Palangkaraya_AQMS")
+])
+
+# Cari posisi stasiun Palangka Raya
+posisi_palangka <- grep(
+  "Palangka",
+  names(data_aqms_list),
+  ignore.case = TRUE
+)
+
+# Lihat posisi dan nama aslinya
+print(posisi_palangka)
+dput(names(data_aqms_list)[posisi_palangka])
+
+# Ambil data Palangka Raya
+data_palangka <- data_aqms_list[[posisi_palangka[1]]]
+
+# Periksa struktur data
+names(data_palangka)
+dim(data_palangka)
+
+data_sampit <- data_aqms_list[[
+  grep("Sampit", names(data_aqms_list), ignore.case = TRUE)[1]
+]]
+
+names(data_sampit)
+dim(data_sampit)
+
+
+library(dplyr)
+library(lubridate)
+library(tidyr)
+
+# Gabungkan data dua stasiun
+data_dua_stasiun <- bind_rows(
+  data_palangka %>% mutate(stasiun = "Palangka Raya"),
+  data_sampit %>% mutate(stasiun = "Sampit")
+)
+
+# Tentukan periode pengamatan
+data_perbandingan <- data_dua_stasiun %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start),
+    tanggal = as.Date(waktu),
+    periode = if_else(
+      tanggal == as.Date("2026-10-14"),
+      "14 Oktober",
+      "10-13 Oktober"
+    )
+  ) %>%
+  filter(
+    tanggal >= as.Date("2026-10-10"),
+    tanggal <= as.Date("2026-10-14"),
+    qc_flag == "VALID"
+  )
+
+# Ringkasan seluruh parameter
+hasil_perbandingan <- data_perbandingan %>%
+  group_by(stasiun, periode) %>%
+  summarise(
+    PM25 = mean(pm25_ug_m3, na.rm = TRUE),
+    PM10 = mean(pm10_ug_m3, na.rm = TRUE),
+    SO2 = mean(so2_ug_m3, na.rm = TRUE),
+    CO = mean(co_ug_m3, na.rm = TRUE),
+    O3 = mean(o3_ug_m3, na.rm = TRUE),
+    NO2 = mean(no2_ug_m3, na.rm = TRUE),
+    Suhu = mean(temperature_c, na.rm = TRUE),
+    Kelembapan = mean(humidity_pct, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(hasil_perbandingan, width = Inf)
+
+
+
+str(data_palangka)
+str(data_sampit)
+data_palangka %>%
+  select(pm25_ug_m3, pm10_ug_m3, so2_ug_m3,
+         co_ug_m3, o3_ug_m3, no2_ug_m3) %>%
+  head(10)
+
+data_sampit %>%
+  select(pm25_ug_m3, pm10_ug_m3, so2_ug_m3,
+         co_ug_m3, o3_ug_m3, no2_ug_m3) %>%
+  head(10)
+
+
+library(readr)
+library(dplyr)
+
+kolom_polutan <- c(
+  "pm25_ug_m3",
+  "pm10_ug_m3",
+  "so2_ug_m3",
+  "co_ug_m3",
+  "o3_ug_m3",
+  "no2_ug_m3"
+)
+
+data_palangka <- data_palangka %>%
+  mutate(across(
+    all_of(kolom_polutan),
+    ~ parse_number(as.character(.x))
+  ))
+
+data_sampit <- data_sampit %>%
+  mutate(across(
+    all_of(kolom_polutan),
+    ~ parse_number(as.character(.x))
+  ))
+
+data_dua_stasiun <- bind_rows(
+  data_palangka %>% mutate(stasiun = "Palangka Raya"),
+  data_sampit %>% mutate(stasiun = "Sampit")
+)
+
+data_perbandingan <- data_dua_stasiun %>%
+  mutate(
+    waktu = lubridate::ymd_hms(timestamp_start),
+    tanggal = as.Date(waktu),
+    periode = if_else(
+      tanggal == as.Date("2026-10-14"),
+      "14 Oktober",
+      "10-13 Oktober"
+    )
+  ) %>%
+  filter(
+    tanggal >= as.Date("2026-10-10"),
+    tanggal <= as.Date("2026-10-14"),
+    qc_flag == "VALID"
+  )
+
+hasil_perbandingan <- data_perbandingan %>%
+  group_by(stasiun, periode) %>%
+  summarise(
+    across(
+      all_of(kolom_polutan),
+      ~ mean(.x, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+
+print(hasil_perbandingan, width = Inf)
+
+
+library(dplyr)
+library(readr)
+
+kolom_numerik <- c(
+  "pm25_ug_m3",
+  "pm10_ug_m3",
+  "so2_ug_m3",
+  "co_ug_m3",
+  "o3_ug_m3",
+  "no2_ug_m3",
+  "temperature_c",
+  "humidity_pct",
+  "wind_speed_ms",
+  "wind_direction_deg"
+)
+
+data_palangka_clean <- data_palangka %>%
+  mutate(
+    across(
+      all_of(kolom_numerik),
+      ~ parse_number(as.character(.x))
+    )
+  )
+
+data_sampit_clean <- data_sampit %>%
+  mutate(
+    across(
+      all_of(kolom_numerik),
+      ~ parse_number(as.character(.x))
+    )
+  )
+str(data_palangka_clean)
+str(data_sampit_clean)
+data_palangka_clean %>%
+  select(pm25_ug_m3, pm10_ug_m3, so2_ug_m3) %>%
+  head(10)
+
+audit_konversi <- bind_rows(
+  data_palangka_clean %>%
+    summarise(
+      stasiun = "Palangka Raya",
+      across(
+        all_of(kolom_numerik),
+        ~ sum(is.na(.x))
+      )
+    ),
+  data_sampit_clean %>%
+    summarise(
+      stasiun = "Sampit",
+      across(
+        all_of(kolom_numerik),
+        ~ sum(is.na(.x))
+      )
+    )
+)
+
+print(audit_konversi, width = Inf)
+data_palangka %>%
+  count(pm25_ug_m3, sort = TRUE) %>%
+  print(n = 15)
+
+data_sampit %>%
+  count(pm25_ug_m3, sort = TRUE) %>%
+  print(n = 15)
+
+
+
+
+
+library(dplyr)
+library(lubridate)
+
+# Gabungkan kedua stasiun
+gabungan_stasiun <- bind_rows(
+  data_palangka_clean %>%
+    mutate(stasiun = "Palangka Raya"),
+  
+  data_sampit_clean %>%
+    mutate(stasiun = "Sampit")
+) %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start)
+  )
+
+# Pilih hanya pengamatan dengan QC VALID
+data_valid <- gabungan_stasiun %>%
+  filter(qc_flag == "VALID")
+
+# Ringkasan statistik PM2.5
+ringkasan_pm25 <- data_valid %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_pengamatan = sum(!is.na(pm25_ug_m3)),
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    standar_deviasi = sd(pm25_ug_m3, na.rm = TRUE),
+    minimum = min(pm25_ug_m3, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_pm25)
+
+library(ggplot2)
+
+ggplot(data_valid,
+       aes(x = stasiun, y = pm25_ug_m3, fill = stasiun)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  labs(
+    title = "Distribusi PM2.5 pada Dua Stasiun",
+    x = "Stasiun",
+    y = "PM2.5 (µg/m³)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(data_valid,
+       aes(x = pm25_ug_m3, fill = stasiun)) +
+  geom_histogram(
+    bins = 50,
+    alpha = 0.6,
+    position = "identity"
+  ) +
+  facet_wrap(~stasiun, ncol = 1) +
+  labs(
+    title = "Distribusi Frekuensi PM2.5",
+    x = "PM2.5 (µg/m³)",
+    y = "Frekuensi"
+  ) +
+  theme_minimal()
+
+ggplot(data_valid,
+       aes(x = stasiun, y = pm25_ug_m3, fill = stasiun)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  coord_cartesian(ylim = c(0, 200)) +
+  labs(
+    title = "Distribusi PM2.5 pada Dua Stasiun",
+    subtitle = "Tampilan diperbesar pada rentang 0–200 µg/m³",
+    x = "Stasiun",
+    y = "PM2.5 (µg/m³)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(data_valid,
+       aes(x = pm25_ug_m3, fill = stasiun)) +
+  geom_histogram(
+    bins = 50,
+    alpha = 0.6
+  ) +
+  facet_wrap(~stasiun, ncol = 1) +
+  coord_cartesian(xlim = c(0, 200)) +
+  labs(
+    title = "Distribusi PM2.5 pada Rentang Konsentrasi Utama",
+    x = "PM2.5 (µg/m³)",
+    y = "Frekuensi"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+lonjakan_pm25 <- data_valid %>%
+  group_by(stasiun) %>%
+  slice_max(
+    order_by = pm25_ug_m3,
+    n = 20,
+    with_ties = FALSE
+  ) %>%
+  select(
+    stasiun,
+    timestamp_start,
+    pm25_ug_m3,
+    qc_flag
+  ) %>%
+  arrange(stasiun, desc(pm25_ug_m3))
+
+print(lonjakan_pm25, n = 40)
+
+
+
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+periode_lonjakan <- data_valid %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start)
+  ) %>%
+  filter(
+    waktu >= ymd_hms("2026-10-05 00:00:00"),
+    waktu <= ymd_hms("2026-10-14 23:59:59")
+  ) %>%
+  arrange(stasiun, waktu)
+
+ggplot(
+  periode_lonjakan,
+  aes(x = waktu, y = pm25_ug_m3, color = stasiun)
+) +
+  geom_line() +
+  geom_point(size = 0.7) +
+  labs(
+    title = "Pola PM2.5 pada 5–14 Oktober 2026",
+    subtitle = "Palangka Raya dan Sampit",
+    x = "Waktu",
+    y = "PM2.5 (µg/m³)",
+    color = "Stasiun"
+  ) +
+  theme_minimal()
+
+periode_lonjakan %>%
+  group_by(stasiun, tanggal = as.Date(waktu)) %>%
+  summarise(
+    jumlah_data = n(),
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    minimum = min(pm25_ug_m3, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  print(n = Inf)
+
+pemeriksaan_pola <- periode_lonjakan %>%
+  group_by(stasiun, tanggal = as.Date(waktu)) %>%
+  summarise(
+    jumlah_nilai_unik = n_distinct(pm25_ug_m3),
+    nilai_tersering = names(
+      sort(table(pm25_ug_m3), decreasing = TRUE)
+    )[1],
+    frekuensi_nilai_tersering = max(table(pm25_ug_m3)),
+    .groups = "drop"
+  )
+
+print(pemeriksaan_pola, n = Inf)
+periode_lonjakan %>%
+  filter(as.Date(waktu) == as.Date("2026-10-14")) %>%
+  select(stasiun, waktu, pm25_ug_m3, qc_flag) %>%
+  arrange(stasiun, waktu) %>%
+  print(n = Inf)
+
+
+# Ringkasan distribusi PM2.5 setiap stasiun
+data_valid %>%
+  group_by(stasiun) %>%
+  summarise(
+    minimum = min(pm25_ug_m3, na.rm = TRUE),
+    Q1 = quantile(pm25_ug_m3, 0.25, na.rm = TRUE),
+    median = median(pm25_ug_m3, na.rm = TRUE),
+    rata_rata = mean(pm25_ug_m3, na.rm = TRUE),
+    Q3 = quantile(pm25_ug_m3, 0.75, na.rm = TRUE),
+    maksimum = max(pm25_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  )
+metadata_sensor %>%
+  filter(
+    grepl("PM2.5|PM25", Parameters, ignore.case = TRUE) |
+      grepl("pm25", Header, ignore.case = TRUE)
+  )
+
+metadata_sensor %>%
+  select(Supplier, Sensors, Type, Parameters, Header, Units) %>%
+  print(n = Inf, width = Inf)
+
+sensor %>%
+  select(sensor_id, location_id, nama_sensor, model_sensor, region_group) %>%
+  filter(
+    grepl("Palangka|Sampit", location_id, ignore.case = TRUE)
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Menampilkan sensor di Kalimantan Tengah
+sensor_kalteng <- sensors_raw %>%
+  filter(region_group == "Kalimantan Tengah") %>%
+  select(
+    sensor_id,
+    location_id,
+    nama_sensor,
+    model_sensor,
+    status_operasional,
+    region_group
+  )
+
+print(sensor_kalteng, n = Inf)
+sensor_kalteng %>%
+  filter(sensor_id %in% c("SENS-004", "SENS-005"))
+
+# Periksa ID sensor pada data Palangka Raya
+data_palangka_clean %>%
+  count(sensor_id)
+
+# Periksa ID sensor pada data Sampit
+data_sampit_clean %>%
+  count(sensor_id)
+
+# Periksa nama kolom dan tipe data
+data_palangka_clean %>%
+  select(
+    pm25_ug_m3,
+    pm10_ug_m3,
+    so2_ug_m3,
+    co_ug_m3,
+    o3_ug_m3,
+    no2_ug_m3
+  ) %>%
+  glimpse()
+
+data_sampit_clean %>%
+  select(
+    pm25_ug_m3,
+    pm10_ug_m3,
+    so2_ug_m3,
+    co_ug_m3,
+    o3_ug_m3,
+    no2_ug_m3
+  ) %>%
+  glimpse()
+
+# Periksa metadata alat Palangka Raya dan Sampit
+metadata_sensor %>%
+  filter(
+    grepl("Thermo Scientific|Met One",
+          Sensors,
+          ignore.case = TRUE)
+  ) %>%
+  select(
+    Supplier,
+    Sensors,
+    Type,
+    Parameters,
+    Header,
+    Units
+  ) %>%
+  print(n = Inf, width = Inf)
+
+metadata_sensor %>%
+  filter(
+    grepl("Thermo Scientific|Met One",
+          Sensors,
+          ignore.case = TRUE),
+    grepl("PM2.5|PM25", Parameters, ignore.case = TRUE)
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Periksa metadata alat Palangka Raya dan Sampit
+metadata_sensor %>%
+  filter(
+    grepl("Thermo Scientific|Met One",
+          Supplier,
+          ignore.case = TRUE)
+  ) %>%
+  select(
+    Supplier,
+    Sensors,
+    Type,
+    Parameters,
+    Header,
+    Units
+  ) %>%
+  print(n = Inf, width = Inf)
+
+
+metadata_sensor %>%
+  filter(
+    grepl("Thermo Scientific|Met One",
+          Supplier,
+          ignore.case = TRUE),
+    grepl("PM2.5|PM25",
+          Parameters,
+          ignore.case = TRUE)
+  ) %>%
+  print(n = Inf, width = Inf)
+
+
+# Audit header satuan PM2.5 seluruh stasiun
+audit_satuan_pm25 <- tibble(
+  stasiun = names(data_aqms_list),
+  header_pm25 = map_chr(
+    data_aqms_list,
+    ~ {
+      kolom <- names(.x)
+      hasil <- kolom[grepl("^pm25_", kolom, ignore.case = TRUE)]
+      
+      if (length(hasil) == 0) {
+        "Tidak ditemukan"
+      } else {
+        paste(hasil, collapse = ", ")
+      }
+    }
+  )
+)
+
+print(audit_satuan_pm25, n = Inf)
+
+# Identifikasi stasiun yang menggunakan header ppm
+stasiun_ppm <- audit_satuan_pm25 %>%
+  filter(grepl("ppm", header_pm25))
+
+# Ambil sensor ID dari masing-masing stasiun
+sensor_ppm <- purrr::imap_dfr(
+  data_aqms_list,
+  ~ {
+    if ("pm25_ppm" %in% names(.x)) {
+      .x %>%
+        distinct(sensor_id) %>%
+        mutate(stasiun = .y)
+    }
+  }
+)
+
+# Hubungkan dengan metadata sensor
+detail_sensor_ppm <- sensor_ppm %>%
+  left_join(sensors_raw, by = "sensor_id") %>%
+  select(
+    stasiun,
+    sensor_id,
+    location_id,
+    nama_sensor,
+    model_sensor,
+    status_operasional,
+    region_group
+  )
+
+print(detail_sensor_ppm, n = Inf, width = Inf)
+
+# Periksa data PM2.5 dari ketiga stasiun
+data_pm25_ppm <- purrr::imap_dfr(
+  data_aqms_list,
+  ~ {
+    if ("pm25_ppm" %in% names(.x)) {
+      .x %>%
+        select(
+          measurement_id,
+          sensor_id,
+          timestamp_start,
+          pm25_ppm,
+          qc_flag
+        ) %>%
+        mutate(stasiun = .y)
+    }
+  }
+)
+
+# Lihat 10 data pertama setiap stasiun
+data_pm25_ppm %>%
+  group_by(stasiun) %>%
+  slice_head(n = 10) %>%
+  print(n = Inf)
+
+# Ringkasan nilai PM2.5
+data_pm25_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_data = n(),
+    minimum = min(pm25_ppm, na.rm = TRUE),
+    Q1 = quantile(pm25_ppm, 0.25, na.rm = TRUE),
+    median = median(pm25_ppm, na.rm = TRUE),
+    rata_rata = mean(pm25_ppm, na.rm = TRUE),
+    maksimum = max(pm25_ppm, na.rm = TRUE)
+  )
+
+# Periksa tipe data awal
+class(data_pm25_ppm$pm25_ppm)
+
+# Ubah PM2.5 menjadi numeric
+data_pm25_ppm <- data_pm25_ppm %>%
+  mutate(
+    pm25_ppm = readr::parse_number(as.character(pm25_ppm))
+  )
+
+# Periksa kembali tipe datanya
+class(data_pm25_ppm$pm25_ppm)
+
+ringkasan_pm25_ppm <- data_pm25_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_data = n(),
+    minimum = min(pm25_ppm, na.rm = TRUE),
+    Q1 = quantile(pm25_ppm, 0.25, na.rm = TRUE),
+    median = median(pm25_ppm, na.rm = TRUE),
+    rata_rata = mean(pm25_ppm, na.rm = TRUE),
+    maksimum = max(pm25_ppm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_pm25_ppm, n = Inf)
+
+metadata_sensor %>%
+  filter(
+    grepl("5014i|BAM-1020", Sensors, ignore.case = TRUE) |
+      grepl("Particulate Matter PM2.5", Parameters,
+            ignore.case = TRUE)
+  ) %>%
+  select(
+    Supplier,
+    Sensors,
+    Type,
+    Parameters,
+    Header,
+    Units
+  ) %>%
+  print(n = Inf, width = Inf)
+
+audit_satuan_gas <- purrr::imap_dfr(
+  data_aqms_list,
+  ~ tibble(
+    stasiun = .y,
+    header_so2 = if ("so2_ug_m3" %in% names(.x)) {
+      "so2_ug_m3"
+    } else if ("so2_ppm" %in% names(.x)) {
+      "so2_ppm"
+    } else {
+      NA_character_
+    },
+    header_no2 = if ("no2_ug_m3" %in% names(.x)) {
+      "no2_ug_m3"
+    } else if ("no2_ppm" %in% names(.x)) {
+      "no2_ppm"
+    } else {
+      NA_character_
+    }
+  )
+)
+
+print(audit_satuan_gas, n = Inf)
+
+metadata_sensor %>%
+  filter(
+    grepl("SO2|Sulfur Dioxide|NO2|Nitrogen Dioxide",
+          Parameters, ignore.case = TRUE)
+  ) %>%
+  select(
+    Supplier,
+    Sensors,
+    Type,
+    Parameters,
+    Header,
+    Units
+  ) %>%
+  print(n = Inf, width = Inf)
+
+purrr::imap_dfr(
+  data_aqms_list,
+  ~ {
+    if ("so2_ppm" %in% names(.x)) {
+      .x %>%
+        select(
+          sensor_id,
+          timestamp_start,
+          so2_ppm,
+          no2_ppm,
+          qc_flag
+        ) %>%
+        mutate(stasiun = .y)
+    }
+  }
+) %>%
+  group_by(stasiun) %>%
+  slice_head(n = 5) %>%
+  print(n = Inf)
+
+sensors_raw %>%
+  filter(sensor_id %in% c("SENS-026", "SENS-024", "SENS-022")) %>%
+  select(
+    sensor_id,
+    location_id,
+    nama_sensor,
+    model_sensor,
+    status_operasional,
+    region_group
+  ) %>%
+  print(n = Inf, width = Inf)
+
+metadata_sensor %>%
+  filter(
+    grepl("SO2|Sulfur Dioxide|NO2|Nitrogen Dioxide",
+          Parameters, ignore.case = TRUE)
+  ) %>%
+  print(n = Inf, width = Inf)
+
+# Cek stasiun yang memiliki kolom SO2 dan NO2 dalam ppm
+audit_satuan_gas %>%
+  filter(
+    header_so2 == "so2_ppm" |
+      header_no2 == "no2_ppm"
+  ) %>%
+  print(n = Inf)
+
+# Ringkasan nilai SO2 dan NO2 dalam ppm
+ringkasan_gas_ppm <- data_gas_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_data = n(),
+    
+    so2_min = min(so2_ppm, na.rm = TRUE),
+    so2_median = median(so2_ppm, na.rm = TRUE),
+    so2_mean = mean(so2_ppm, na.rm = TRUE),
+    so2_max = max(so2_ppm, na.rm = TRUE),
+    
+    no2_min = min(no2_ppm, na.rm = TRUE),
+    no2_median = median(no2_ppm, na.rm = TRUE),
+    no2_mean = mean(no2_ppm, na.rm = TRUE),
+    no2_max = max(no2_ppm, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+print(ringkasan_gas_ppm, n = Inf)
+
+data_gas_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    total = n(),
+    valid = sum(qc_flag == "VALID", na.rm = TRUE),
+    non_valid = sum(qc_flag != "VALID", na.rm = TRUE),
+    .groups = "drop"
+  )
+
+data_gas_ppm <- purrr::imap_dfr(
+  data_aqms_list,
+  function(.x, .y) {
+    
+    if (all(c("so2_ppm", "no2_ppm") %in% names(.x))) {
+      
+      .x %>%
+        select(
+          sensor_id,
+          timestamp_start,
+          so2_ppm,
+          no2_ppm,
+          qc_flag
+        ) %>%
+        mutate(stasiun = .y)
+      
+    } else {
+      NULL
+    }
+  }
+)
+
+dim(data_gas_ppm)
+
+unique(data_gas_ppm$stasiun)
+
+head(data_gas_ppm)
+
+ringkasan_gas_ppm <- data_gas_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_data = n(),
+    
+    so2_min = min(so2_ppm, na.rm = TRUE),
+    so2_median = median(so2_ppm, na.rm = TRUE),
+    so2_mean = mean(so2_ppm, na.rm = TRUE),
+    so2_max = max(so2_ppm, na.rm = TRUE),
+    
+    no2_min = min(no2_ppm, na.rm = TRUE),
+    no2_median = median(no2_ppm, na.rm = TRUE),
+    no2_mean = mean(no2_ppm, na.rm = TRUE),
+    no2_max = max(no2_ppm, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+print(ringkasan_gas_ppm, n = Inf)
+
+# Pemeriksaan QC data gas dalam ppm
+
+ringkasan_qc_gas <- data_gas_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    total_data = n(),
+    
+    valid = sum(qc_flag == "VALID", na.rm = TRUE),
+    
+    suspect = sum(qc_flag == "SUSPECT", na.rm = TRUE),
+    
+    warmup = sum(qc_flag == "WARMUP", na.rm = TRUE),
+    
+    calibration = sum(qc_flag == "CALIBRATING", na.rm = TRUE),
+    
+    missing_qc = sum(is.na(qc_flag)),
+    
+    persentase_valid = valid / total_data * 100,
+    
+    .groups = "drop"
+  )
+
+print(ringkasan_qc_gas, n = Inf)
+data_gas_ppm %>%
+  group_by(stasiun) %>%
+  summarise(
+    nol_so2 = sum(so2_ppm == 0, na.rm = TRUE),
+    nol_no2 = sum(no2_ppm == 0, na.rm = TRUE),
+    missing_so2 = sum(is.na(so2_ppm)),
+    missing_no2 = sum(is.na(no2_ppm)),
+    .groups = "drop"
+  )
+
+# Memeriksa nilai nol berdasarkan status QC
+
+pemeriksaan_nol_qc <- data_gas_ppm %>%
+  group_by(stasiun, qc_flag) %>%
+  summarise(
+    jumlah_data = n(),
+    nol_so2 = sum(so2_ppm == 0, na.rm = TRUE),
+    nol_no2 = sum(no2_ppm == 0, na.rm = TRUE),
+    missing_so2 = sum(is.na(so2_ppm)),
+    missing_no2 = sum(is.na(no2_ppm)),
+    .groups = "drop"
+  )
+
+print(pemeriksaan_nol_qc, n = Inf)
+
+data_gas_ppm %>%
+  filter(qc_flag == "VALID") %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_valid = n(),
+    nol_so2 = sum(so2_ppm == 0, na.rm = TRUE),
+    nol_no2 = sum(no2_ppm == 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Membuat data gas dengan QC VALID
+
+data_gas_valid <- data_gas_ppm %>%
+  filter(qc_flag == "VALID")
+
+# Memeriksa jumlah data setelah penyaringan
+
+data_gas_valid %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_data = n(),
+    missing_so2 = sum(is.na(so2_ppm)),
+    missing_no2 = sum(is.na(no2_ppm)),
+    nol_so2 = sum(so2_ppm == 0, na.rm = TRUE),
+    nol_no2 = sum(no2_ppm == 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ringkasan_gas_valid <- data_gas_valid %>%
+  group_by(stasiun) %>%
+  summarise(
+    n = n(),
+    SO2_min = min(so2_ppm, na.rm = TRUE),
+    SO2_mean = mean(so2_ppm, na.rm = TRUE),
+    SO2_max = max(so2_ppm, na.rm = TRUE),
+    NO2_min = min(no2_ppm, na.rm = TRUE),
+    NO2_mean = mean(no2_ppm, na.rm = TRUE),
+    NO2_max = max(no2_ppm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_gas_valid, n = Inf)
+
+# Periksa informasi suhu dan tekanan
+names(data_gas_valid)
+
+# Periksa metadata sensor
+print(detail_sensor_ppm, n = Inf, width = Inf)
+
+# Faktor konversi pada 25 derajat C dan 1 atm
+
+faktor_so2 <- (64.066 * 1000) / 24.45
+faktor_no2 <- (46.0055 * 1000) / 24.45
+
+# Konversi ppm ke ug/m3
+
+data_gas_iku <- data_gas_valid %>%
+  mutate(
+    so2_ug_m3 = so2_ppm * faktor_so2,
+    no2_ug_m3 = no2_ppm * faktor_no2
+  )
+
+# Ringkasan konsentrasi hasil konversi
+
+ringkasan_gas_iku <- data_gas_iku %>%
+  group_by(stasiun) %>%
+  summarise(
+    SO2_mean = mean(so2_ug_m3, na.rm = TRUE),
+    NO2_mean = mean(no2_ug_m3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_gas_iku, n = Inf)
+
+# Melihat nama seluruh objek data AQMS
+names(data_aqms_list)
+
+# Melihat struktur salah satu data AQMS
+glimpse(data_aqms_list[[1]])
+
+library(dplyr)
+library(lubridate)
+
+# Membuat rata-rata harian setiap stasiun
+gas_harian <- data_gas_iku %>%
+  mutate(
+    tanggal = as.Date(timestamp_start),
+    tahun = year(timestamp_start)
+  ) %>%
+  group_by(stasiun, tahun, tanggal) %>%
+  summarise(
+    SO2_harian = mean(so2_ug_m3, na.rm = TRUE),
+    NO2_harian = mean(no2_ug_m3, na.rm = TRUE),
+    jumlah_jam = n(),
+    .groups = "drop"
+  )
+
+# Menghitung rata-rata tahunan setiap stasiun
+gas_tahunan <- gas_harian %>%
+  group_by(stasiun, tahun) %>%
+  summarise(
+    jumlah_hari = n(),
+    SO2_tahunan = mean(SO2_harian, na.rm = TRUE),
+    NO2_tahunan = mean(NO2_harian, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(gas_tahunan, n = Inf)
+
+library(dplyr)
+library(purrr)
+library(readr)
+library(lubridate)
+
+# Faktor konversi ppm ke ug/m3
+# Asumsi suhu 25 C dan tekanan 1 atm
+faktor_so2 <- (64.066 * 1000) / 24.45
+faktor_no2 <- (46.0055 * 1000) / 24.45
+
+# Fungsi untuk mengambil kolom numerik
+ambil_angka <- function(data, kolom) {
+  if (kolom %in% names(data)) {
+    parse_number(as.character(data[[kolom]]))
+  } else {
+    rep(NA_real_, nrow(data))
+  }
+}
+
+# Menggabungkan seluruh 27 file AQMS
+data_gas_27 <- purrr::imap_dfr(
+  data_aqms_list,
+  function(x, nama_stasiun) {
+    
+    # Ambil SO2
+    if ("so2_ug_m3" %in% names(x)) {
+      so2 <- ambil_angka(x, "so2_ug_m3")
+    } else {
+      so2 <- ambil_angka(x, "so2_ppm") * faktor_so2
+    }
+    
+    # Ambil NO2
+    if ("no2_ug_m3" %in% names(x)) {
+      no2 <- ambil_angka(x, "no2_ug_m3")
+    } else {
+      no2 <- ambil_angka(x, "no2_ppm") * faktor_no2
+    }
+    
+    tibble(
+      stasiun = nama_stasiun,
+      sensor_id = as.character(x$sensor_id),
+      timestamp_start = as.character(x$timestamp_start),
+      qc_flag = as.character(x$qc_flag),
+      so2_ug_m3 = so2,
+      no2_ug_m3 = no2
+    )
+  }
+)
+
+# Memeriksa hasil penggabungan
+dim(data_gas_27)
+
+length(unique(data_gas_27$stasiun))
+
+glimpse(data_gas_27)
+
+ringkasan_error_gas <- audit_nilai_gas %>%
+  group_by(stasiun, qc_flag) %>%
+  summarise(
+    jumlah_nilai_bermasalah = sum(frekuensi),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jumlah_nilai_bermasalah))
+
+print(ringkasan_error_gas, n = Inf)
+# Periksa distribusi status QC seluruh 27 stasiun
+ringkasan_qc_27 <- imap_dfr(
+  data_aqms_list,
+  function(x, nama_stasiun) {
+    x %>%
+      count(qc_flag) %>%
+      mutate(stasiun = nama_stasiun)
+  }
+)
+
+print(ringkasan_qc_27, n = Inf)
+
+ringkasan_persentase_qc <- ringkasan_qc_27 %>%
+  group_by(stasiun) %>%
+  summarise(
+    total_data = sum(n),
+    data_valid = sum(n[qc_flag == "VALID"]),
+    data_nonvalid = total_data - data_valid,
+    persentase_valid = data_valid / total_data * 100,
+    persentase_nonvalid = 100 - persentase_valid,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(persentase_valid))
+
+print(ringkasan_persentase_qc, n = Inf)
+
+ggplot(
+  ringkasan_persentase_qc,
+  aes(
+    x = reorder(stasiun, persentase_valid),
+    y = persentase_valid
+  )
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  geom_hline(
+    yintercept = 75,
+    linetype = "dashed",
+    color = "red"
+  ) +
+  labs(
+    title = "Persentase Data VALID pada 27 Stasiun AQMS",
+    subtitle = "Proporsi pengamatan dengan status QC VALID",
+    x = "Stasiun AQMS",
+    y = "Persentase VALID (%)"
+  ) +
+  theme_minimal()
+
+# Pemeriksaan duplikasi waktu per stasiun
+audit_duplikat_waktu <- data_gas_27 %>%
+  count(stasiun, timestamp_start) %>%
+  filter(n > 1) %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_timestamp_duplikat = n(),
+    total_pengulangan = sum(n - 1),
+    .groups = "drop"
+  )
+
+print(audit_duplikat_waktu, n = Inf)
+
+audit_jumlah_data <- data_gas_27 %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_observasi = n(),
+    tanggal_awal = min(as.Date(timestamp_start), na.rm = TRUE),
+    tanggal_akhir = max(as.Date(timestamp_start), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jumlah_observasi))
+
+print(audit_jumlah_data, n = Inf)
+
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  group_by(stasiun, sensor_id, timestamp_start) %>%
+  filter(n() > 1) %>%
+  arrange(timestamp_start) %>%
+  print(n = 20)
+
+data_gas_27 %>%
+  filter(stasiun == "PLB-01_TalangBetutu_AQMS") %>%
+  mutate(
+    waktu = as.POSIXct(timestamp_start)
+  ) %>%
+  summarise(
+    jumlah_baris = n(),
+    jumlah_waktu_unik = n_distinct(waktu),
+    jumlah_sensor = n_distinct(sensor_id)
+  )
+data_gas_27 %>%
+  filter(stasiun == "PLB-01_TalangBetutu_AQMS") %>%
+  arrange(timestamp_start) %>%
+  mutate(
+    selisih_menit = as.numeric(
+      difftime(
+        timestamp_start,
+        lag(timestamp_start),
+        units = "mins"
+      )
+    )
+  ) %>%
+  count(selisih_menit, sort = TRUE) %>%
+  print(n = 15)
+
+data_gas_27 %>%
+  filter(stasiun == "PLB-01_TalangBetutu_AQMS") %>%
+  arrange(timestamp_start) %>%
+  mutate(
+    selisih_menit = as.numeric(
+      difftime(
+        timestamp_start,
+        lag(timestamp_start),
+        units = "mins"
+      )
+    )
+  ) %>%
+  filter(selisih_menit %in% c(15, 60)) %>%
+  group_by(
+    tahun = lubridate::year(timestamp_start),
+    bulan = lubridate::month(timestamp_start),
+    selisih_menit
+  ) %>%
+  summarise(
+    jumlah_pengamatan = n(),
+    .groups = "drop"
+  ) %>%
+  print(n = Inf)
+
+class(data_gas_27$timestamp_start)
+
+head(
+  data_gas_27 %>%
+    filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+    select(timestamp_start),
+  10
+)
+
+str(
+  data_aqms_list[["JMB-02_MuaroJambi_AQMS"]])
+
+library(lubridate)
+library(dplyr)
+
+# Periksa rentang tanggal Muaro Jambi
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  summarise(
+    tanggal_awal = min(
+      ymd_hms(timestamp_start, quiet = TRUE),
+      na.rm = TRUE
+    ),
+    tanggal_akhir = max(
+      ymd_hms(timestamp_start, quiet = TRUE),
+      na.rm = TRUE
+    ),
+    jumlah_timestamp_unik = n_distinct(timestamp_start),
+    jumlah_baris = n()
+  )
+duplikat_muaro <- data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  count(sensor_id, timestamp_start) %>%
+  filter(n > 1) %>%
+  arrange(timestamp_start)
+
+print(duplikat_muaro, n = 20)
+data_gas_27 %>%
+  semi_join(
+    duplikat_muaro,
+    by = c("sensor_id", "timestamp_start")
+  ) %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  select(
+    timestamp_start,
+    sensor_id,
+    qc_flag,
+    so2_ug_m3,
+    no2_ug_m3
+  ) %>%
+  arrange(timestamp_start) %>%
+  print(n = 30)
+
+library(dplyr)
+library(lubridate)
+
+audit_tanggal_muaro <- data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE),
+    tanggal_bermasalah = is.na(waktu) |
+      as.Date(waktu) < as.Date("2024-01-01") |
+      as.Date(waktu) > as.Date("2026-10-14")
+  ) %>%
+  summarise(
+    total_data = n(),
+    tanggal_bermasalah = sum(tanggal_bermasalah),
+    tanggal_normal = sum(!tanggal_bermasalah),
+    valid_dengan_tanggal_bermasalah =
+      sum(qc_flag == "VALID" & tanggal_bermasalah,
+          na.rm = TRUE)
+  )
+
+print(audit_tanggal_muaro)
+duplikat_muaro %>%
+  summarise(
+    kelompok_duplikat = n(),
+    total_baris_berlebih = sum(n - 1),
+    kelompok_tahun_1970 =
+      sum(grepl("^1970", timestamp_start)),
+    baris_berlebih_tahun_1970 =
+      sum(ifelse(
+        grepl("^1970", timestamp_start),
+        n - 1,
+        0
+      ))
+  )
+
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE),
+    tanggal_bermasalah =
+      is.na(waktu) |
+      as.Date(waktu) < as.Date("2024-01-01") |
+      as.Date(waktu) > as.Date("2026-10-14")
+  ) %>%
+  summarise(
+    total_data = n(),
+    tanggal_bermasalah = sum(tanggal_bermasalah),
+    tanggal_normal = sum(!tanggal_bermasalah),
+    jumlah_na = sum(is.na(waktu))
+  )
+
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    is.na(waktu) |
+      as.Date(waktu) < as.Date("2024-01-01") |
+      as.Date(waktu) > as.Date("2026-10-14")
+  ) %>%
+  count(timestamp_start, qc_flag, sort = TRUE)
+
+duplikat_muaro %>%
+  filter(
+    timestamp_start == "1970-01-01 00:00:00.000"
+  ) %>%
+  count(sensor_id, qc_flag, so2_ug_m3, no2_ug_m3)
+
+data_gas_27 %>%
+  filter(
+    stasiun == "JMB-02_MuaroJambi_AQMS",
+    timestamp_start == "1970-01-01 00:00:00.000"
+  ) %>%
+  count(
+    sensor_id,
+    qc_flag,
+    so2_ug_m3,
+    no2_ug_m3,
+    sort = TRUE
+  ) %>%
+  print(n = Inf)
+
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  summarise(
+    total_data = n(),
+    
+    so2_na = sum(is.na(so2_ug_m3)),
+    no2_na = sum(is.na(no2_ug_m3)),
+    
+    so2_negatif = sum(so2_ug_m3 < 0, na.rm = TRUE),
+    no2_negatif = sum(no2_ug_m3 < 0, na.rm = TRUE),
+    
+    so2_50000 = sum(so2_ug_m3 == 50000, na.rm = TRUE),
+    no2_8888 = sum(no2_ug_m3 == 8888, na.rm = TRUE),
+    
+    so2_9999 = sum(so2_ug_m3 == -9999, na.rm = TRUE),
+    no2_9999 = sum(no2_ug_m3 == -9999, na.rm = TRUE)
+  )
+
+data_gas_27 %>%
+  filter(stasiun == "JMB-02_MuaroJambi_AQMS") %>%
+  group_by(qc_flag) %>%
+  summarise(
+    jumlah_data = n(),
+    
+    so2_na = sum(is.na(so2_ug_m3)),
+    no2_na = sum(is.na(no2_ug_m3)),
+    
+    so2_negatif = sum(so2_ug_m3 < 0, na.rm = TRUE),
+    no2_negatif = sum(no2_ug_m3 < 0, na.rm = TRUE),
+    
+    so2_50000 = sum(so2_ug_m3 == 50000, na.rm = TRUE),
+    no2_8888 = sum(no2_ug_m3 == 8888, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  print(n = Inf)
+
+data_muaro_layak <- data_gas_27 %>%
+  filter(
+    stasiun == "JMB-02_MuaroJambi_AQMS"
+  ) %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(waktu),
+    as.Date(waktu) >= as.Date("2024-01-01"),
+    as.Date(waktu) <= as.Date("2026-10-14"),
+    !is.na(so2_ug_m3),
+    !is.na(no2_ug_m3),
+    so2_ug_m3 >= 0,
+    no2_ug_m3 >= 0
+  )
+
+cat("Data VALID yang lolos pemeriksaan:", nrow(data_muaro_layak))
+
+data_valid_bersih <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(waktu),
+    as.Date(waktu) >= as.Date("2024-01-01"),
+    as.Date(waktu) <= as.Date("2026-10-14")
+  )
+
+ringkasan_valid_bersih <- data_valid_bersih %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_valid = n(),
+    jumlah_so2_tersedia = sum(!is.na(so2_ug_m3) & so2_ug_m3 >= 0),
+    jumlah_no2_tersedia = sum(!is.na(no2_ug_m3) & no2_ug_m3 >= 0),
+    .groups = "drop"
+  )
+
+print(ringkasan_valid_bersih, n = Inf)
+
+ringkasan_kualitas_27 <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE),
+    waktu_valid = !is.na(waktu) &
+      as.Date(waktu) >= as.Date("2024-01-01") &
+      as.Date(waktu) <= as.Date("2026-10-14")
+  ) %>%
+  group_by(stasiun) %>%
+  summarise(
+    total_data = n(),
+    
+    data_lolos = sum(
+      qc_flag == "VALID" &
+        waktu_valid &
+        !is.na(so2_ug_m3) &
+        !is.na(no2_ug_m3) &
+        so2_ug_m3 >= 0 &
+        no2_ug_m3 >= 0,
+      na.rm = TRUE
+    ),
+    
+    persentase_lolos = data_lolos / total_data * 100,
+    
+    .groups = "drop"
+  ) %>%
+  arrange(persentase_lolos)
+
+print(ringkasan_kualitas_27, n = Inf)
+
+audit_interval_27 <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(waktu),
+    as.Date(waktu) >= as.Date("2024-01-01"),
+    as.Date(waktu) <= as.Date("2026-10-14")
+  ) %>%
+  arrange(stasiun, sensor_id, waktu) %>%
+  group_by(stasiun, sensor_id) %>%
+  mutate(
+    selisih_menit = as.numeric(
+      difftime(waktu, lag(waktu), units = "mins")
+    )
+  ) %>%
+  filter(!is.na(selisih_menit)) %>%
+  summarise(
+    interval_15_menit = sum(selisih_menit == 15),
+    interval_60_menit = sum(selisih_menit == 60),
+    interval_lainnya = sum(
+      selisih_menit != 15 & selisih_menit != 60
+    ),
+    median_interval = median(selisih_menit),
+    .groups = "drop"
+  )
+
+print(audit_interval_27, n = Inf)
+
+audit_detail_interval <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(waktu),
+    as.Date(waktu) >= as.Date("2024-01-01"),
+    as.Date(waktu) <= as.Date("2026-10-14")
+  ) %>%
+  arrange(stasiun, sensor_id, waktu) %>%
+  group_by(stasiun, sensor_id) %>%
+  mutate(
+    selisih_menit = as.numeric(
+      difftime(waktu, lag(waktu), units = "mins")
+    )
+  ) %>%
+  filter(!is.na(selisih_menit)) %>%
+  summarise(
+    interval_15 = sum(selisih_menit == 15),
+    interval_60 = sum(selisih_menit == 60),
+    interval_lebih_60 = sum(selisih_menit > 60),
+    interval_kurang_60 = sum(
+      selisih_menit < 60 & selisih_menit != 15
+    ),
+    jeda_lebih_24_jam = sum(selisih_menit > 1440),
+    median_interval = median(selisih_menit),
+    maksimum_jeda = max(selisih_menit),
+    .groups = "drop"
+  )
+
+print(audit_detail_interval, n = Inf)
+
+
+audit_detail_interval %>%
+  select(
+    stasiun,
+    interval_15,
+    interval_60,
+    interval_lebih_60,
+    interval_kurang_60,
+    jeda_lebih_24_jam,
+    median_interval,
+    maksimum_jeda
+  ) %>%
+  arrange(desc(maksimum_jeda)) %>%
+  print(n = Inf, width = Inf)
+
+audit_jeda_panjang <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  ) %>%
+  filter(
+    qc_flag == "VALID",
+    !is.na(waktu),
+    as.Date(waktu) >= as.Date("2024-01-01"),
+    as.Date(waktu) <= as.Date("2026-10-14")
+  ) %>%
+  arrange(stasiun, sensor_id, waktu) %>%
+  group_by(stasiun, sensor_id) %>%
+  mutate(
+    waktu_sebelumnya = lag(waktu),
+    jeda_jam = as.numeric(
+      difftime(waktu, waktu_sebelumnya, units = "hours")
+    )
+  ) %>%
+  filter(jeda_jam > 24) %>%
+  ungroup() %>%
+  select(
+    stasiun,
+    sensor_id,
+    waktu_sebelumnya,
+    waktu,
+    jeda_jam
+  ) %>%
+  arrange(desc(jeda_jam))
+
+print(audit_jeda_panjang, n = 50, width = Inf)
+
+library(purrr)
+library(dplyr)
+library(lubridate)
+
+# Mengubah timestamp data mentah
+data_gas_27_waktu <- data_gas_27 %>%
+  mutate(
+    waktu = ymd_hms(timestamp_start, quiet = TRUE)
+  )
+
+# Ambil 20 kejadian jeda terpanjang
+jeda_20_terpanjang <- audit_jeda_panjang %>%
+  slice_max(jeda_jam, n = 20, with_ties = FALSE)
+
+# Periksa seluruh status QC dalam setiap jeda
+audit_status_jeda <- map_dfr(
+  seq_len(nrow(jeda_20_terpanjang)),
+  function(i) {
+    
+    awal <- jeda_20_terpanjang$waktu_sebelumnya[i]
+    akhir <- jeda_20_terpanjang$waktu[i]
+    stasiun_i <- jeda_20_terpanjang$stasiun[i]
+    sensor_i <- jeda_20_terpanjang$sensor_id[i]
+    
+    data_gas_27_waktu %>%
+      filter(
+        stasiun == stasiun_i,
+        sensor_id == sensor_i,
+        waktu > awal,
+        waktu <= akhir
+      ) %>%
+      count(qc_flag, name = "jumlah_baris") %>%
+      mutate(
+        stasiun = stasiun_i,
+        waktu_awal = awal,
+        waktu_akhir = akhir,
+        jeda_jam = jeda_20_terpanjang$jeda_jam[i]
+      )
+  }
+)
+
+print(audit_status_jeda, n = Inf, width = Inf)
+
+audit_status_seluruh <- data_gas_27 %>%
+  count(stasiun, qc_flag, name = "jumlah_baris") %>%
+  group_by(stasiun) %>%
+  mutate(
+    total_baris = sum(jumlah_baris),
+    persentase = jumlah_baris / total_baris * 100
+  ) %>%
+  ungroup() %>%
+  arrange(stasiun, desc(persentase))
+
+print(audit_status_seluruh, n = Inf)
+ringkasan_status_bermasalah <- audit_status_seluruh %>%
+  filter(qc_flag != "VALID") %>%
+  group_by(qc_flag) %>%
+  summarise(
+    jumlah_total = sum(jumlah_baris),
+    jumlah_stasiun = n_distinct(stasiun),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jumlah_total))
+
+print(ringkasan_status_bermasalah, n = Inf)
+
+
+klasifikasi_stasiun <- ringkasan_kualitas_27 %>%
+  mutate(
+    kategori_kualitas = case_when(
+      persentase_lolos >= 95 ~ "Sangat tinggi",
+      persentase_lolos >= 75 ~ "Menengah",
+      persentase_lolos >= 25 ~ "Rendah",
+      TRUE ~ "Sangat rendah"
+    ),
+    rekomendasi_awal = case_when(
+      persentase_lolos >= 95 ~ "Kandidat analisis utama",
+      persentase_lolos >= 75 ~ "Analisis dengan catatan",
+      TRUE ~ "Tidak digunakan sebagai analisis utama"
+    )
+  ) %>%
+  arrange(persentase_lolos)
+
+print(klasifikasi_stasiun, n = Inf)
+
+names(ringkasan_kualitas_27)
+
+audit_missing_polutan <- data_gas_27 %>%
+  group_by(stasiun) %>%
+  summarise(
+    total_data = n(),
+    
+    pm25_missing = sum(is.na(pm25_ug_m3)),
+    pm10_missing = sum(is.na(pm10_ug_m3)),
+    so2_missing = sum(is.na(so2_ug_m3)),
+    co_missing = sum(is.na(co_ppm)),
+    o3_missing = sum(is.na(o3_ug_m3)),
+    no2_missing = sum(is.na(no2_ug_m3)),
+    
+    .groups = "drop"
+  )
+
+print(audit_missing_polutan, n = Inf)
+names(data_gas_27)
+
+audit_missing_polutan <- data_gas_27 %>%
+  group_by(stasiun) %>%
+  summarise(
+    total_data = n(),
+    
+    so2_missing = sum(is.na(so2_ug_m3)),
+    so2_persen_missing = mean(is.na(so2_ug_m3)) * 100,
+    
+    no2_missing = sum(is.na(no2_ug_m3)),
+    no2_persen_missing = mean(is.na(no2_ug_m3)) * 100,
+    
+    .groups = "drop"
+  )
+
+print(audit_missing_polutan, n = Inf)
+
+nama_kolom_per_stasiun <- purrr::map_dfr(
+  names(data_aqms_list),
+  function(nama_file) {
+    
+    tibble(
+      stasiun = nama_file,
+      nama_kolom = names(data_aqms_list[[nama_file]])
+    )
+  }
+)
+
+print(nama_kolom_per_stasiun, n = Inf)
+nama_kolom_per_stasiun %>%
+  filter(
+    grepl(
+      "pm25|pm10|so2|no2|co|o3",
+      nama_kolom,
+      ignore.case = TRUE
+    )
+  ) %>%
+  print(n = Inf)
+
+nama_kolom_per_stasiun %>%
+  group_by(nama_kolom) %>%
+  summarise(
+    jumlah_stasiun = n_distinct(stasiun),
+    daftar_stasiun = paste(stasiun, collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jumlah_stasiun)) %>%
+  print(n = Inf)
+nama_kolom_per_stasiun %>%
+  filter(grepl(
+    "pm25|pm10|so2|no2|co|o3",
+    nama_kolom,
+    ignore.case = TRUE
+  )) %>%
+  count(nama_kolom, sort = TRUE) %>%
+  print(n = Inf)
+
+
+library(dplyr)
+library(purrr)
+library(tidyr)
+
+daftar_polutan <- list(
+  PM25 = c("pm25_ug_m3", "pm25_ppm"),
+  PM10 = c("pm10_ug_m3", "pm10_ppm"),
+  SO2  = c("so2_ug_m3", "so2_ppm"),
+  NO2  = c("no2_ug_m3", "no2_ppm"),
+  CO   = c("co_ug_m3", "co_ppm"),
+  O3   = c("o3_ug_m3", "o3_ppm")
+)
+
+audit_missing_polutan <- imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    map_dfr(names(daftar_polutan), function(polutan) {
+      
+      kolom <- intersect(
+        daftar_polutan[[polutan]],
+        names(data)
+      )
+      
+      if (length(kolom) == 0) {
+        return(tibble(
+          stasiun = nama_stasiun,
+          polutan = polutan,
+          nama_kolom = NA_character_,
+          satuan = NA_character_,
+          total_data = nrow(data),
+          missing = NA_integer_,
+          persen_missing = NA_real_
+        ))
+      }
+      
+      tibble(
+        stasiun = nama_stasiun,
+        polutan = polutan,
+        nama_kolom = kolom[1],
+        satuan = ifelse(
+          grepl("_ppm$", kolom[1]),
+          "ppm",
+          "ug/m3"
+        ),
+        total_data = nrow(data),
+        missing = sum(is.na(data[[kolom[1]]])),
+        persen_missing =
+          mean(is.na(data[[kolom[1]]])) * 100
+      )
+    })
+  }
+)
+
+print(audit_missing_polutan, n = Inf)
+
+audit_kode_khusus <- imap_dfr(
+  data_aqms_list,
+  function(data, nama_stasiun) {
+    
+    kolom_polutan <- intersect(
+      unlist(daftar_polutan),
+      names(data)
+    )
+    
+    map_dfr(kolom_polutan, function(kolom) {
+      
+      tibble(
+        stasiun = nama_stasiun,
+        polutan = kolom,
+        jumlah_minus99 = sum(data[[kolom]] == -99, na.rm = TRUE),
+        jumlah_minus9999 = sum(data[[kolom]] == -9999, na.rm = TRUE),
+        jumlah_50000 = sum(data[[kolom]] == 50000, na.rm = TRUE),
+        jumlah_8888 = sum(data[[kolom]] == 8888, na.rm = TRUE),
+        jumlah_nol = sum(data[[kolom]] == 0, na.rm = TRUE)
+      )
+    })
+  }
+)
+
+print(
+  audit_kode_khusus %>%
+    filter(
+      if_any(
+        starts_with("jumlah_"),
+        ~ .x > 0
+      )
+    ),
+  n = Inf
+)
+
+# Cari nama objek Muaro Jambi
+nama_muaro <- grep(
+  "JMB-02_MuaroJambi",
+  names(data_aqms_list),
+  value = TRUE
+)
+
+# Periksa struktur kolom polutan
+str(data_aqms_list[[nama_muaro]] %>%
+      select(so2_ug_m3, no2_ug_m3))
+
+# Tampilkan nilai terkecil dan terbesar
+data_aqms_list[[nama_muaro]] %>%
+  summarise(
+    min_so2 = min(so2_ug_m3, na.rm = TRUE),
+    max_so2 = max(so2_ug_m3, na.rm = TRUE),
+    min_no2 = min(no2_ug_m3, na.rm = TRUE),
+    max_no2 = max(no2_ug_m3, na.rm = TRUE)
+  )
+
+data_aqms_list[[nama_muaro]] %>%
+  count(so2_ug_m3, sort = TRUE) %>%
+  print(n = 20)
+
+data_aqms_list[[nama_muaro]] %>%
+  count(no2_ug_m3, sort = TRUE) %>%
+  print(n = 20)
+
+data_muaro_valid <- data_aqms_list[[nama_muaro]] %>%
+  filter(qc_flag == "VALID")
+
+# Lihat jumlah data VALID
+nrow(data_muaro_valid)
+
+# Lihat distribusi nilai SO2
+data_muaro_valid %>%
+  count(so2_ug_m3, sort = TRUE) %>%
+  print(n = 20)
+
+# Lihat distribusi nilai NO2
+data_muaro_valid %>%
+  count(no2_ug_m3, sort = TRUE) %>%
+  print(n = 20)
+
+audit_tipe_polutan <- map_dfr(
+  names(data_aqms_list),
+  function(nama) {
+    
+    data <- data_aqms_list[[nama]]
+    
+    tibble(
+      stasiun = nama,
+      tipe_so2 = if ("so2_ug_m3" %in% names(data))
+        class(data$so2_ug_m3)[1] else NA,
+      tipe_no2 = if ("no2_ug_m3" %in% names(data))
+        class(data$no2_ug_m3)[1] else NA
+    )
+  }
+)
+
+print(audit_tipe_polutan, n = Inf)
+
+# Ambil data Muaro Jambi yang berstatus VALID
+data_muaro_valid <- data_aqms_list[[nama_muaro]] %>%
+  filter(qc_flag == "VALID")
+
+# Pastikan tipe datanya
+str(data_muaro_valid[, c("so2_ug_m3", "no2_ug_m3")])
+
+# Cek apakah ada nilai nonangka
+data_muaro_valid %>%
+  summarise(
+    total = n(),
+    so2_nonangka = sum(is.na(as.numeric(so2_ug_m3))),
+    no2_nonangka = sum(is.na(as.numeric(no2_ug_m3)))
+  )
+
+data_muaro_valid %>%
+  summarise(
+    so2_min = min(as.numeric(so2_ug_m3), na.rm = TRUE),
+    so2_max = max(as.numeric(so2_ug_m3), na.rm = TRUE),
+    no2_min = min(as.numeric(no2_ug_m3), na.rm = TRUE),
+    no2_max = max(as.numeric(no2_ug_m3), na.rm = TRUE)
+  )
+
+audit_tipe_polutan %>%
+  filter(is.na(tipe_so2) | is.na(tipe_no2))
+
+# Ambil tiga stasiun yang menggunakan format berbeda
+nama_tiga_stasiun <- c(
+  "BJB-01_Banjarbaru_AQMS",
+  "MDN-01_Medan_AQMS",
+  "PSW-01_Pesawaran_AQMS"
+)
+
+# Periksa nama kolom dan satuannya
+for (nama in nama_tiga_stasiun) {
+  
+  cat("\n====================\n")
+  cat("STASIUN:", nama, "\n")
+  
+  data <- data_aqms_list[[nama]]
+  
+  print(names(data))
+  
+  print(
+    data %>%
+      filter(qc_flag == "VALID") %>%
+      summarise(
+        jumlah_valid = n(),
+        across(
+          where(is.numeric),
+          ~ sum(is.na(.x))
+        )
+      )
+  )
+}
+for (nama in nama_tiga_stasiun) {
+  
+  cat("\nSTASIUN:", nama, "\n")
+  
+  data <- data_aqms_list[[nama]]
+  
+  kolom_ppm <- grep(
+    "_ppm$",
+    names(data),
+    value = TRUE
+  )
+  
+  print(
+    data %>%
+      filter(qc_flag == "VALID") %>%
+      select(all_of(kolom_ppm)) %>%
+      summary()
+  )
+}
+
+for (nama in nama_tiga_stasiun) {
+  
+  cat("\n====================\n")
+  cat("STASIUN:", nama, "\n")
+  
+  data <- data_aqms_list[[nama]]
+  
+  print(
+    data %>%
+      count(qc_flag, sort = TRUE)
+  )
+}
+
+data_aqms_list[["BJB-01_Banjarbaru_AQMS"]] %>%
+  select(
+    qc_flag,
+    pm25_ppm,
+    pm10_ppm,
+    so2_ppm,
+    co_ppm,
+    o3_ppm,
+    no2_ppm
+  ) %>%
+  print(n = 15)
+
+library(dplyr)
+library(purrr)
+library(readr)
+
+# Kolom polutan
+kolom_polutan <- c(
+  "pm25_ug_m3", "pm10_ug_m3",
+  "so2_ug_m3", "no2_ug_m3",
+  "o3_ug_m3", "co_ug_m3",
+  "pm25_ppm", "pm10_ppm",
+  "so2_ppm", "no2_ppm",
+  "o3_ppm", "co_ppm"
+)
+
+# Cleaning seluruh stasiun
+data_aqms_clean <- imap_dfr(
+  data_aqms_list,
+  function(data, nama) {
+    
+    data %>%
+      filter(trimws(qc_flag) == "VALID") %>%
+      mutate(
+        across(
+          any_of(kolom_polutan),
+          ~ parse_number(as.character(.x))
+        ),
+        stasiun = nama
+      )
+  }
+)
+
+# Periksa hasil
+dim(data_aqms_clean)
+glimpse(data_aqms_clean)
+
+data_aqms_clean %>%
+  count(stasiun, name = "jumlah_data_valid") %>%
+  arrange(jumlah_data_valid) %>%
+  print(n = Inf)
+
+library(dplyr)
+library(purrr)
+library(readr)
+
+# Kolom polutan
+kolom_polutan <- c(
+  "pm25_ug_m3", "pm10_ug_m3",
+  "so2_ug_m3", "no2_ug_m3",
+  "o3_ug_m3", "co_ug_m3",
+  "pm25_ppm", "pm10_ppm",
+  "so2_ppm", "no2_ppm",
+  "o3_ppm", "co_ppm"
+)
+
+# Cleaning seluruh stasiun
+data_aqms_clean <- imap_dfr(
+  data_aqms_list,
+  function(data, nama) {
+    
+    data %>%
+      filter(trimws(qc_flag) == "VALID") %>%
+      mutate(
+        across(
+          any_of(kolom_polutan),
+          ~ parse_number(as.character(.x))
+        ),
+        stasiun = nama
+      )
+  }
+)
+
+# Periksa hasil
+dim(data_aqms_clean)
+glimpse(data_aqms_clean)
+
+data_aqms_clean %>%
+  count(stasiun, name = "jumlah_data_valid") %>%
+  arrange(jumlah_data_valid) %>%
+  print(n = Inf)
+
+# Pemeriksaan missing value
+audit_missing_clean <- data_aqms_clean %>%
+  summarise(
+    across(
+      everything(),
+      ~ sum(is.na(.x))
+    )
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variabel",
+    values_to = "jumlah_missing"
+  ) %>%
+  mutate(
+    persentase_missing =
+      jumlah_missing / nrow(data_aqms_clean) * 100
+  ) %>%
+  arrange(desc(persentase_missing))
+
+print(audit_missing_clean, n = Inf)
+
+library(lubridate)
+library(dplyr)
+
+# 1. Periksa format waktu
+audit_waktu <- data_aqms_clean %>%
+  summarise(
+    waktu_awal = min(timestamp_start, na.rm = TRUE),
+    waktu_akhir = max(timestamp_start, na.rm = TRUE),
+    jumlah_waktu_kosong = sum(is.na(timestamp_start)),
+    jumlah_interval_tidak_valid =
+      sum(timestamp_end < timestamp_start, na.rm = TRUE)
+  )
+
+print(audit_waktu)
+
+# 2. Periksa duplikasi berdasarkan stasiun dan waktu
+audit_duplikat <- data_aqms_clean %>%
+  count(stasiun, sensor_id, timestamp_start) %>%
+  filter(n > 1) %>%
+  arrange(desc(n))
+
+print(audit_duplikat, n = 20)
+
+# 3. Jumlah total duplikasi
+nrow(audit_duplikat)
+
+# Periksa tipe data timestamp
+class(data_aqms_clean$timestamp_start)
+
+# Lihat 10 nilai timestamp pertama
+head(data_aqms_clean$timestamp_start, 10)
+
+# Cari data dengan tahun sebelum 2024
+data_aqms_clean %>%
+  filter(year(timestamp_start) < 2024) %>%
+  select(stasiun, timestamp_start) %>%
+  print(n = 20)
+
+data_aqms_clean <- data_aqms_clean %>%
+  mutate(
+    timestamp_start = ymd_hms(timestamp_start),
+    timestamp_end = ymd_hms(timestamp_end)
+  )
+data_aqms_clean %>%
+  summarise(
+    waktu_awal = min(timestamp_start, na.rm = TRUE),
+    waktu_akhir = max(timestamp_start, na.rm = TRUE),
+    jumlah_sebelum_2024 = sum(year(timestamp_start) < 2024)
+  )
+data_aqms_clean <- data_aqms_clean %>%
+  mutate(
+    tanggal = as.Date(timestamp_start)
+  )
+data_harian_aqms <- data_aqms_clean %>%
+  filter(tanggal >= as.Date("2024-01-01")) %>%
+  group_by(stasiun, tanggal) %>%
+  summarise(
+    pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    pm10 = mean(pm10_ug_m3, na.rm = TRUE),
+    so2 = mean(so2_ug_m3, na.rm = TRUE),
+    no2 = mean(no2_ug_m3, na.rm = TRUE),
+    o3 = mean(o3_ug_m3, na.rm = TRUE),
+    co = mean(co_ug_m3, na.rm = TRUE),
+    jumlah_pengamatan = n(),
+    .groups = "drop"
+  )
+data_harian_aqms <- data_aqms_clean %>%
+  filter(tanggal >= as.Date("2024-01-01")) %>%
+  group_by(stasiun, tanggal) %>%
+  summarise(
+    pm25 = mean(pm25_ug_m3, na.rm = TRUE),
+    pm10 = mean(pm10_ug_m3, na.rm = TRUE),
+    so2 = mean(so2_ug_m3, na.rm = TRUE),
+    no2 = mean(no2_ug_m3, na.rm = TRUE),
+    o3 = mean(o3_ug_m3, na.rm = TRUE),
+    co = mean(co_ug_m3, na.rm = TRUE),
+    jumlah_pengamatan = n(),
+    .groups = "drop"
+  )
+
+audit_harian <- data_harian_aqms %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_hari = n(),
+    pm25_tersedia = sum(!is.na(pm25)),
+    pm10_tersedia = sum(!is.na(pm10)),
+    so2_tersedia = sum(!is.na(so2)),
+    no2_tersedia = sum(!is.na(no2)),
+    o3_tersedia = sum(!is.na(o3)),
+    co_tersedia = sum(!is.na(co)),
+    .groups = "drop"
+  )
+
+print(audit_harian, n = Inf)
+
+# Cek nama kolom polutan pada 3 stasiun
+nama_tiga_stasiun <- c(
+  "BJB-01_Banjarbaru_AQMS",
+  "MDN-01_Medan_AQMS",
+  "PSW-01_Pesawaran_AQMS"
+)
+
+for (nama in nama_tiga_stasiun) {
+  
+  cat("\nSTASIUN:", nama, "\n")
+  
+  print(
+    names(data_aqms_list[[nama]])
+  )
+}
+print(metadata_sensor)
+
+sort(
+  sapply(ls(), function(x) {
+    as.numeric(object.size(get(x))) / 1024^2
+  }),
+  decreasing = TRUE
+)
+write.csv(
+  data_aqms_clean,
+  "data_aqms_clean.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  data_harian_aqms,
+  "data_harian_aqms.csv",
+  row.names = FALSE
+)
+
+ukuran_objek <- sort(
+  sapply(ls(envir = .GlobalEnv), function(x) {
+    as.numeric(object.size(
+      get(x, envir = .GlobalEnv)
+    )) / 1024^2
+  }),
+  decreasing = TRUE
+)
+
+print(round(ukuran_objek, 2))
+
+# Buat folder OUTPUT
+dir.create("OUTPUT", showWarnings = FALSE)
+
+# Simpan data ke folder OUTPUT
+write.csv(
+  data_aqms_clean,
+  "OUTPUT/data_aqms_clean.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  data_harian_aqms,
+  "OUTPUT/data_harian_aqms.csv",
+  row.names = FALSE
+)
+
+# Buka folder OUTPUT
+browseURL(normalizePath("OUTPUT"))
+
+
+# Cek file yang sudah tersimpan
+list.files("OUTPUT")
+
+# Cek struktur metadata sensor
+names(metadata_sensor)
+
+# Lihat beberapa baris metadata
+head(metadata_sensor, 10)
+
+# Cek ukuran data yang sudah dibersihkan
+dim(data_aqms_clean)
+
+# Cek ukuran data agregasi harian sementara
+dim(data_harian_aqms)
+
+# Lihat seluruh kombinasi satuan
+unique(metadata_sensor$Units)
+
+# Cari metadata yang menggunakan ppm
+metadata_sensor %>%
+  filter(grepl("ppm", Units, ignore.case = TRUE))
+
+# Lihat seluruh metadata terkait tiga stasiun
+metadata_sensor %>%
+  filter(grepl("pm25|pm10|so2|no2|co|o3",
+               Header, ignore.case = TRUE)) %>%
+  print(n = Inf)
+
+# Periksa nama seluruh kolom
+names(data_aqms_clean)
+
+# Periksa jumlah data polutan ppm pada tiga stasiun
+data_aqms_clean %>%
+  filter(stasiun %in% nama_tiga_stasiun) %>%
+  group_by(stasiun) %>%
+  summarise(
+    across(
+      ends_with("_ppm"),
+      ~ sum(!is.na(.)),
+      .names = "jumlah_{.col}"
+    ),
+    .groups = "drop"
+  )
+
+data_aqms_clean %>%
+  group_by(stasiun) %>%
+  summarise(
+    across(
+      ends_with("_ug_m3"),
+      ~ sum(!is.na(.)),
+      .names = "jumlah_{.col}"
+    ),
+    .groups = "drop"
+  )
+
+library(dplyr)
+library(tidyr)
+
+# 1. Fungsi agregasi harian untuk satu kelompok satuan
+buat_agregasi_harian <- function(data, kolom, satuan) {
+  
+  hasil <- data %>%
+    mutate(tanggal = as.Date(tanggal)) %>%
+    filter(
+      !is.na(tanggal),
+      tanggal >= as.Date("2024-01-01"),
+      tanggal <= as.Date("2026-10-14")
+    ) %>%
+    group_by(stasiun, tanggal) %>%
+    summarise(
+      across(
+        all_of(kolom),
+        list(
+          mean = ~ if (all(is.na(.x))) NA_real_
+          else mean(.x, na.rm = TRUE),
+          n = ~ sum(!is.na(.x))
+        ),
+        .names = "{.col}_{.fn}"
+      ),
+      .groups = "drop"
+    ) %>%
+    pivot_longer(
+      cols = -c(stasiun, tanggal),
+      names_to = c("polutan", ".value"),
+      names_pattern = "(.*)_(mean|n)"
+    ) %>%
+    mutate(
+      polutan = sub(paste0("_", satuan, "$"), "", polutan),
+      satuan = satuan
+    ) %>%
+    rename(
+      nilai_rata_rata = mean,
+      jumlah_pengamatan = n
+    ) %>%
+    filter(jumlah_pengamatan > 0)
+  
+  return(hasil)
+}
+
+# 2. Kolom polutan dengan satuan ug/m3
+kolom_ug <- c(
+  "pm25_ug_m3", "pm10_ug_m3",
+  "so2_ug_m3", "no2_ug_m3",
+  "co_ug_m3", "o3_ug_m3"
+)
+
+# 3. Kolom polutan dengan satuan ppm
+kolom_ppm <- c(
+  "pm25_ppm", "pm10_ppm",
+  "so2_ppm", "no2_ppm",
+  "co_ppm", "o3_ppm"
+)
+
+# 4. Buat agregasi masing-masing satuan
+data_harian_ug <- buat_agregasi_harian(
+  data_aqms_clean, kolom_ug, "ug_m3"
+)
+
+data_harian_ppm <- buat_agregasi_harian(
+  data_aqms_clean, kolom_ppm, "ppm"
+)
+
+# 5. Gabungkan hasil tanpa mencampur satuan
+data_harian_final <- bind_rows(
+  data_harian_ug,
+  data_harian_ppm
+) %>%
+  arrange(tanggal, stasiun, polutan)
+
+# 6. Periksa hasil
+dim(data_harian_final)
+head(data_harian_final, 10)
+write.csv(
+  data_harian_final,
+  "OUTPUT/data_harian_final.csv",
+  row.names = FALSE
+)
+file.exists("OUTPUT/data_harian_final.csv")
+
+# Cari objek yang namanya berkaitan dengan data kesehatan
+ls(pattern = "health|kesehatan|harian|resp")
+
+# Lihat semua nama objek di Environment
+ls()
+
+# Ukuran data kesehatan
+dim(health_clean)
+
+# Nama kolom
+names(health_clean)
+
+# Struktur setiap variabel
+str(health_clean)
+
+# Lihat 10 baris pertama
+head(health_clean, 10)
+
+dim(ringkasan_health)
+head(ringkasan_health, 10)
+
+dim(tren_health)
+head(tren_health, 10)
+
+library(dplyr)
+
+health_daily_final <- health_clean %>%
+  filter(date >= as.Date("2024-01-01")) %>%
+  group_by(date) %>%
+  summarise(
+    jumlah_rumah_sakit = n_distinct(hospital_id),
+    
+    suhu_rata_rata = mean(temp_c, na.rm = TRUE),
+    dew_point_rata_rata = mean(dptp_c, na.rm = TRUE),
+    kelembapan_rata_rata = mean(rhum_pct, na.rm = TRUE),
+    
+    resp_admissions_under5 = sum(resp_admissions_under5, na.rm = TRUE),
+    resp_admissions_over60 = sum(resp_admissions_over60, na.rm = TRUE),
+    asthma_emergency_cases = sum(asthma_emergency_cases, na.rm = TRUE),
+    copd_admissions = sum(copd_admissions, na.rm = TRUE),
+    resp = sum(resp, na.rm = TRUE),
+    cvd = sum(cvd, na.rm = TRUE),
+    death = sum(death, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(date)
+
+# Periksa hasil
+dim(health_daily_final)
+head(health_daily_final, 10)
+summary(health_daily_final)
+
+write.csv(
+  health_daily_final,
+  "OUTPUT/health_daily_final.csv",
+  row.names = FALSE
+)
+
+file.exists("OUTPUT/health_daily_final.csv")
+
+aqms_daily_overall <- data_harian_final %>%
+  group_by(tanggal, polutan, satuan) %>%
+  summarise(
+    rata_rata_polusi = mean(nilai_rata_rata, na.rm = TRUE),
+    jumlah_stasiun = n_distinct(stasiun),
+    .groups = "drop"
+  )
+
+dim(aqms_daily_overall)
+head(aqms_daily_overall, 10)
+
+# Gabungkan polusi dan kesehatan berdasarkan tanggal
+aqms_health_join <- aqms_daily_overall %>%
+  left_join(
+    health_daily_final,
+    by = c("tanggal" = "date")
+  ) %>%
+  arrange(tanggal, polutan, satuan)
+
+# Periksa hasil
+dim(aqms_health_join)
+head(aqms_health_join, 12)
+
+# Periksa apakah ada tanggal yang tidak memiliki data kesehatan
+sum(is.na(aqms_health_join$resp))
+write.csv(
+  aqms_health_join,
+  "OUTPUT/aqms_health_join.csv",
+  row.names = FALSE
+)
+
+# Simpan data gabungan
+write.csv(
+  aqms_health_join,
+  "OUTPUT/aqms_health_join.csv",
+  row.names = FALSE
+)
+
+# Ambil PM2.5 dengan satuan ug/m3
+pm25_daily <- aqms_daily_overall %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3"
+  ) %>%
+  arrange(tanggal)
+
+# Hitung persentil ke-90
+ambang_pm25 <- quantile(
+  pm25_daily$rata_rata_polusi,
+  probs = 0.90,
+  na.rm = TRUE
+)
+
+# Lihat nilai ambang dan ringkasan data
+ambang_pm25
+summary(pm25_daily$rata_rata_polusi)
+
+# Periksa jumlah stasiun yang tersedia
+summary(pm25_daily$jumlah_stasiun)
+
+pm25_episode <- pm25_daily %>%
+  mutate(
+    episode = rata_rata_polusi > as.numeric(ambang_pm25)
+  ) %>%
+  mutate(
+    kelompok = cumsum(
+      episode != lag(episode, default = first(episode))
+    )
+  ) %>%
+  filter(episode) %>%
+  group_by(kelompok) %>%
+  summarise(
+    tanggal_mulai = min(tanggal),
+    tanggal_selesai = max(tanggal),
+    durasi_hari = n(),
+    konsentrasi_puncak = max(rata_rata_polusi),
+    konsentrasi_rata_rata = mean(rata_rata_polusi),
+    .groups = "drop"
+  ) %>%
+  arrange(tanggal_mulai)
+
+# Periksa hasil episode
+head(pm25_episode, 10)
+dim(pm25_episode)
+
+# Periksa pola PM2.5 selama episode terpanjang
+validasi_episode <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3",
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  ) %>%
+  group_by(tanggal) %>%
+  summarise(
+    rata_rata = mean(nilai_rata_rata, na.rm = TRUE),
+    median_stasiun = median(nilai_rata_rata, na.rm = TRUE),
+    minimum = min(nilai_rata_rata, na.rm = TRUE),
+    maksimum = max(nilai_rata_rata, na.rm = TRUE),
+    jumlah_stasiun = n_distinct(stasiun),
+    .groups = "drop"
+  )
+
+# Ringkasan selama episode
+summary(validasi_episode)
+
+# Sepuluh hari dengan rata-rata tertinggi
+validasi_episode %>%
+  arrange(desc(rata_rata)) %>%
+  head(10)
+
+library(ggplot2)
+
+ggplot(validasi_episode, aes(x = tanggal, y = rata_rata)) +
+  geom_line() +
+  geom_hline(
+    yintercept = as.numeric(ambang_pm25),
+    linetype = "dashed",
+    color = "red"
+  ) +
+  labs(
+    title = "PM2.5 During the Longest Episode",
+    subtitle = "1 August – 14 October 2026",
+    x = "Date",
+    y = expression(PM[2.5]~"(µg/m³)")
+  ) +
+  theme_minimal()
+
+library(dplyr)
+library(magrittr)
+
+kontribusi_stasiun <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3",
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  ) %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_hari = n(),
+    rata_rata_pm25 = mean(nilai_rata_rata, na.rm = TRUE),
+    median_pm25 = median(nilai_rata_rata, na.rm = TRUE),
+    maksimum_pm25 = max(nilai_rata_rata, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(rata_rata_pm25))
+
+print(kontribusi_stasiun, n = 27)
+
+pm25_14okt <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3",
+    tanggal == as.Date("2026-10-14")
+  ) %>%
+  arrange(desc(nilai_rata_rata))
+
+print(pm25_14okt, n = 27)
+
+pola_bulanan_stasiun <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3",
+    tanggal >= as.Date("2026-08-01")
+  ) %>%
+  mutate(bulan = format(tanggal, "%Y-%m")) %>%
+  group_by(stasiun, bulan) %>%
+  summarise(
+    rata_rata = mean(nilai_rata_rata, na.rm = TRUE),
+    jumlah_hari = n(),
+    .groups = "drop"
+  )
+
+print(pola_bulanan_stasiun, n = 100)
+
+# Ringkasan jaringan PM2.5 berdasarkan tanggal
+pm25_network <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3"
+  ) %>%
+  group_by(tanggal) %>%
+  summarise(
+    rata_rata_jaringan = mean(nilai_rata_rata, na.rm = TRUE),
+    median_jaringan = median(nilai_rata_rata, na.rm = TRUE),
+    maksimum_jaringan = max(nilai_rata_rata, na.rm = TRUE),
+    minimum_jaringan = min(nilai_rata_rata, na.rm = TRUE),
+    jumlah_stasiun = n_distinct(stasiun),
+    stasiun_diatas_100 = sum(nilai_rata_rata > 100, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Ambang P90 berdasarkan median jaringan
+ambang_median <- quantile(
+  pm25_network$median_jaringan,
+  0.90,
+  na.rm = TRUE
+)
+
+ambang_median
+
+# Ringkasan hasil
+summary(pm25_network$median_jaringan)
+
+pm25_episode_median <- pm25_network %>%
+  mutate(
+    episode = median_jaringan > as.numeric(ambang_median)
+  ) %>%
+  mutate(
+    kelompok = cumsum(
+      episode != lag(episode, default = first(episode))
+    )
+  ) %>%
+  filter(episode) %>%
+  group_by(kelompok) %>%
+  summarise(
+    tanggal_mulai = min(tanggal),
+    tanggal_selesai = max(tanggal),
+    durasi_hari = n(),
+    median_puncak = max(median_jaringan),
+    median_rata_rata = mean(median_jaringan),
+    rata_rata_puncak = max(rata_rata_jaringan),
+    .groups = "drop"
+  )
+
+print(pm25_episode_median, n = Inf)
+
+library(ggplot2)
+
+ggplot(pm25_network, aes(x = tanggal)) +
+  geom_line(
+    aes(y = rata_rata_jaringan, color = "Rata-rata"),
+    linewidth = 0.6
+  ) +
+  geom_line(
+    aes(y = median_jaringan, color = "Median"),
+    linewidth = 0.7
+  ) +
+  labs(
+    title = "PM2.5: Mean vs Median Across Monitoring Stations",
+    x = "Tanggal",
+    y = expression(PM[2.5]~"(µg/m³)"),
+    color = "Indikator"
+  ) +
+  theme_minimal()
+
+# 1. Simpan ringkasan jaringan PM2.5
+write.csv(
+  pm25_network,
+  "OUTPUT/pm25_network_daily.csv",
+  row.names = FALSE
+)
+
+# 2. Simpan episode berdasarkan rata-rata
+write.csv(
+  pm25_episode,
+  "OUTPUT/pm25_episode_mean.csv",
+  row.names = FALSE
+)
+
+# 3. Simpan episode berdasarkan median
+write.csv(
+  pm25_episode_median,
+  "OUTPUT/pm25_episode_median.csv",
+  row.names = FALSE
+)
+
+# 4. Simpan ringkasan kontribusi setiap stasiun
+write.csv(
+  kontribusi_stasiun,
+  "OUTPUT/pm25_station_contribution.csv",
+  row.names = FALSE
+)
+
+# 5. Simpan data kesehatan
+write.csv(
+  health_daily_final,
+  "OUTPUT/health_daily_final.csv",
+  row.names = FALSE
+)
+
+# 6. Periksa seluruh file output
+list.files("OUTPUT")
+
+
+library(dplyr)
+
+peta_pm25_agustus <- data_harian_final %>%
+  filter(
+    polutan == "pm25",
+    satuan == "ug_m3",
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  ) %>%
+  group_by(stasiun) %>%
+  summarise(
+    rata_rata_pm25 = mean(nilai_rata_rata, na.rm = TRUE),
+    jumlah_hari = sum(!is.na(nilai_rata_rata)),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    sites %>%
+      select(station_code, latitude_dd, longitude_dd),
+    by = c("stasiun" = "station_code")
+  )
+
+write.csv(
+  peta_pm25_agustus,
+  "OUTPUT/peta_pm25_agustus.csv",
+  row.names = FALSE
+)
+
+data_bjb <- data_aqms_list[["BJB-01_Banjarbaru_AQMS"]]
+
+# Hitung nilai persis 0.3367
+sum(
+  as.numeric(data_bjb$pm25_ppm) == 0.3367,
+  na.rm = TRUE
+)
+
+# Hitung nilai yang dibulatkan 3 desimal menjadi 0.337
+sum(
+  round(as.numeric(data_bjb$pm25_ppm), 3) == 0.337,
+  na.rm = TRUE
+)
+
+# Periksa jumlah seluruh data
+nrow(data_bjb)
+
+# Periksa jumlah data VALID
+sum(data_bjb$qc_flag == "VALID", na.rm = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+
+kolom_gas <- c(
+  "so2_ug_m3", "so2_ppm",
+  "no2_ug_m3", "no2_ppm"
+)
+
+audit_nilai_gas <- imap_dfr(
+  data_aqms_list,
+  function(x, nama_stasiun) {
+    
+    kolom_ada <- intersect(kolom_gas, names(x))
+    
+    x %>%
+      mutate(stasiun = nama_stasiun) %>%
+      select(stasiun, qc_flag, all_of(kolom_ada)) %>%
+      pivot_longer(
+        cols = all_of(kolom_ada),
+        names_to = "parameter",
+        values_to = "nilai_asli"
+      ) %>%
+      mutate(
+        nilai_asli = as.character(nilai_asli),
+        nilai_angka = suppressWarnings(
+          as.numeric(nilai_asli)
+        )
+      ) %>%
+      filter(
+        !is.na(nilai_asli),
+        trimws(nilai_asli) != "",
+        is.na(nilai_angka) |
+          !is.finite(nilai_angka)
+      ) %>%
+      count(
+        stasiun, parameter, qc_flag, nilai_asli,
+        name = "frekuensi"
+      )
+  }
+)
+
+print(audit_nilai_gas, n = Inf)
+
+
+print(ringkasan_qc)
+
+
+library(dplyr)
+
+kelengkapan_jaringan <- ringkasan_qc %>%
+  group_by(flag_qc) %>%
+  summarise(
+    jumlah_data = sum(jumlah_data),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    persentase = jumlah_data / sum(jumlah_data) * 100,
+    status = ifelse(flag_qc == "VALID",
+                    "Data Valid", "Data Tidak Valid")
+  )
+
+print(kelengkapan_jaringan)
+write.csv(
+  kelengkapan_jaringan,
+  "OUTPUT/kelengkapan_jaringan.csv",
+  row.names = FALSE
+)
+
+library(dplyr)
+
+pm25_episode_median <- pm25_episode_median %>%
+  arrange(tanggal_mulai) %>%
+  mutate(
+    episode = paste("Episode", row_number())
+  )
+write.csv(
+  pm25_episode_median,
+  "OUTPUT/pm25_episode_median.csv",
+  row.names = FALSE
+)
+
+
+library(dplyr)
+
+# Data PM2.5
+data_pm25 <- aqms_health_join %>%
+  filter(polutan == "pm25", satuan == "ug_m3")
+
+# Data CO
+data_co <- aqms_health_join %>%
+  filter(polutan == "co", satuan == "ug_m3")
+
+# Korelasi PM2.5 dengan resp
+cor.test(
+  data_pm25$rata_rata_polusi,
+  data_pm25$resp,
+  method = "spearman",
+  exact = FALSE
+)
+
+# Korelasi CO dengan resp
+cor.test(
+  data_co$rata_rata_polusi,
+  data_co$resp,
+  method = "spearman",
+  exact = FALSE
+)
+
+# PM2.5 dengan asthma
+cor.test(
+  data_pm25$rata_rata_polusi,
+  data_pm25$asthma_emergency_cases,
+  method = "spearman",
+  exact = FALSE
+)
+
+# PM2.5 dengan COPD
+cor.test(
+  data_pm25$rata_rata_polusi,
+  data_pm25$copd_admissions,
+  method = "spearman",
+  exact = FALSE
+)
+
+# CO dengan asthma
+cor.test(
+  data_co$rata_rata_polusi,
+  data_co$asthma_emergency_cases,
+  method = "spearman",
+  exact = FALSE
+)
+
+# CO dengan COPD
+cor.test(
+  data_co$rata_rata_polusi,
+  data_co$copd_admissions,
+  method = "spearman",
+  exact = FALSE
+)
+
+
+library(dplyr)
+
+hasil_korelasi <- data.frame(
+  polutan = c(
+    "PM2.5", "PM2.5", "PM2.5",
+    "CO", "CO", "CO"
+  ),
+  indikator_kesehatan = c(
+    "resp",
+    "Asthma emergency",
+    "COPD admissions",
+    "resp",
+    "Asthma emergency",
+    "COPD admissions"
+  ),
+  koefisien_spearman = c(
+    0.8036419,
+    0.7721179,
+    0.8417776,
+    0.6307096,
+    0.6404354,
+    0.6285206
+  ),
+  p_value = rep("< 2.2e-16", 6)
+)
+
+write.csv(
+  hasil_korelasi,
+  "OUTPUT/hasil_korelasi.csv",
+  row.names = FALSE
+)
+
+
+names(data_pm25)
+
+
+library(dplyr)
+library(tidyr)
+library(lubridate)
+
+# 1. Siapkan data PM2.5
+pm25_lag <- data_pm25 %>%
+  mutate(tanggal = as.Date(
+    parse_date_time(as.character(tanggal),
+                    orders = c("ymd", "dmy", "mdy"))
+  )) %>%
+  group_by(tanggal) %>%
+  summarise(
+    pm25 = mean(rata_rata_polusi, na.rm = TRUE),
+    resp = mean(resp, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 2. Siapkan data CO
+co_lag <- data_co %>%
+  mutate(tanggal = as.Date(
+    parse_date_time(as.character(tanggal),
+                    orders = c("ymd", "dmy", "mdy"))
+  )) %>%
+  group_by(tanggal) %>%
+  summarise(
+    co = mean(rata_rata_polusi, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 3. Gabungkan berdasarkan tanggal
+data_lag <- pm25_lag %>%
+  select(tanggal, resp, pm25) %>%
+  full_join(co_lag, by = "tanggal") %>%
+  complete(
+    tanggal = seq(
+      min(tanggal, na.rm = TRUE),
+      max(tanggal, na.rm = TRUE),
+      by = "day"
+    )
+  ) %>%
+  arrange(tanggal)
+
+# 4. Hitung korelasi setiap lag
+lag_list <- c(0, 1, 2, 3, 7)
+
+hasil_lag <- lapply(lag_list, function(k) {
+  
+  data_lag %>%
+    mutate(
+      resp_lag = lead(resp, k)
+    ) %>%
+    summarise(
+      lag = k,
+      pm25_rho = cor(pm25, resp_lag,
+                     method = "spearman",
+                     use = "complete.obs"),
+      co_rho = cor(co, resp_lag,
+                   method = "spearman",
+                   use = "complete.obs"),
+      jumlah_data = sum(complete.cases(pm25, co, resp_lag))
+    )
+}) %>%
+  bind_rows()
+
+print(hasil_lag)
+
+write.csv(
+  hasil_lag,
+  "OUTPUT/hasil_analisis_lag.csv",
+  row.names = FALSE
+)
+
+library(dplyr)
+library(tidyr)
+
+kelengkapan_per_stasiun <- ringkasan_kualitas_27 %>%
+  select(station_file, flag_qc, jumlah_data, persentase) %>%
+  pivot_wider(
+    names_from = flag_qc,
+    values_from = c(jumlah_data, persentase),
+    values_fill = 0
+  ) %>%
+  mutate(
+    total_pengamatan = jumlah_data_VALID + jumlah_data_NON_VALID,
+    persentase_valid = persentase_VALID
+  ) %>%
+  arrange(desc(persentase_valid))
+
+print(kelengkapan_per_stasiun)
+names(ringkasan_kualitas_27)
+
+kelengkapan_per_stasiun <- ringkasan_kualitas_27 %>%
+  mutate(
+    data_non_valid = total_data - data_lolos,
+    persentase_valid = persentase_lolos
+  ) %>%
+  select(
+    stasiun,
+    total_data,
+    data_lolos,
+    data_non_valid,
+    persentase_valid
+  ) %>%
+  arrange(desc(persentase_valid))
+
+print(kelengkapan_per_stasiun)
+
+write.csv(
+  kelengkapan_per_stasiun,
+  "OUTPUT/kelengkapan_per_stasiun.csv",
+  row.names = FALSE
+)
+
+jumlah_bawah_95 <- sum(
+  ringkasan_kualitas_27$persentase_lolos < 95,
+  na.rm = TRUE
+)
+
+jumlah_bawah_95
+
+jumlah_kualitas_rendah <- sum(
+  ringkasan_kualitas_27$persentase_lolos < 80,
+  na.rm = TRUE
+)
+
+jumlah_kualitas_rendah
+
+names(ringkasan_kualitas_27)
+names(audit_jeda_panjang)
+library(dplyr)
+
+jumlah_stasiun_gap24 <- audit_jeda_panjang %>%
+  filter(jeda_jam > 24) %>%
+  summarise(jumlah = n_distinct(stasiun)) %>%
+  pull(jumlah)
+
+print(jumlah_stasiun_gap24)
+audit_jeda_panjang %>%
+  filter(jeda_jam > 24) %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_gap = n(),
+    gap_terpanjang = max(jeda_jam, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(gap_terpanjang))
+
+
+library(dplyr)
+library(tidyr)
+
+# Menghitung KPI 1
+kpi_bawah_95 <- sum(
+  ringkasan_kualitas_27$persentase_lolos < 95,
+  na.rm = TRUE
+)
+
+# Menghitung KPI 2
+kpi_gap_24 <- jumlah_stasiun_gap24
+
+# Menghitung KPI 3
+kpi_kualitas_rendah <- sum(
+  ringkasan_kualitas_27$persentase_lolos < 80,
+  na.rm = TRUE
+)
+
+# Menggabungkan KPI
+kpi_tab4 <- data.frame(
+  indikator = c(
+    "Stasiun dengan Data Valid di Bawah 95%",
+    "Stasiun dengan Gap Pengamatan di Atas 24 Jam",
+    "Stasiun dengan Kualitas Data Sangat Rendah"
+  ),
+  nilai = c(
+    kpi_bawah_95,
+    kpi_gap_24,
+    kpi_kualitas_rendah
+  )
+)
+
+# Membuat folder OUTPUT jika belum ada
+dir.create("OUTPUT", showWarnings = FALSE)
+
+# Menyimpan CSV
+write.csv(
+  kpi_tab4,
+  "OUTPUT/kpi_tab4.csv",
+  row.names = FALSE
+)
+
+print(kpi_tab4)
+
+
+library(dplyr)
+
+grafik_kelengkapan <- ringkasan_kualitas_27 %>%
+  select(
+    stasiun,
+    total_data,
+    data_lolos,
+    persentase_lolos
+  ) %>%
+  arrange(persentase_lolos)
+
+write.csv(
+  grafik_kelengkapan,
+  "OUTPUT/grafik_kelengkapan.csv",
+  row.names = FALSE
+)
+
+library(dplyr)
+
+# Ringkasan gap pengamatan >24 jam
+grafik_gap <- audit_jeda_panjang %>%
+  filter(jeda_jam > 24) %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_gap = n(),
+    gap_terpanjang_jam = max(jeda_jam, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jumlah_gap))
+
+# Simpan CSV
+write.csv(
+  grafik_gap,
+  "OUTPUT/grafik_gap_pengamatan.csv",
+  row.names = FALSE
+)
+
+print(grafik_gap)
+
+
+names(ringkasan_kualitas_27)
+names(audit_jeda_panjang)
+
+library(dplyr)
+
+ringkasan_gap <- audit_jeda_panjang %>%
+  filter(jeda_jam > 24) %>%
+  group_by(stasiun) %>%
+  summarise(
+    jumlah_gap_24jam = n(),
+    gap_terpanjang = max(jeda_jam, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(ringkasan_gap)
+
+kualitas_monitoring <- ringkasan_kualitas_27 %>%
+  left_join(ringkasan_gap, by = "stasiun") %>%
+  mutate(
+    jumlah_gap_24jam = coalesce(jumlah_gap_24jam, 0L),
+    gap_terpanjang = coalesce(gap_terpanjang, 0),
+    
+    kategori_monitoring = case_when(
+      persentase_lolos >= 98 ~ "Baik",
+      persentase_lolos >= 95 ~ "Evaluasi",
+      TRUE ~ "Perlu Perhatian"
+    )
+  )
+
+print(kualitas_monitoring)
+kualitas_monitoring %>%
+  count(kategori_monitoring)
+write.csv(
+  kualitas_monitoring,
+  "OUTPUT/kualitas_monitoring.csv",
+  row.names = FALSE
+)
+
+kualitas_monitoring %>%
+  count(kategori_monitoring)
+kualitas_monitoring %>%
+  count(kategori_monitoring)
+
+ls()
+grep("site|station|lokasi|metadata", ls(),
+     ignore.case = TRUE, value = TRUE)
+
+# Lihat nama kolom
+names(sites)
+
+# Lihat struktur data
+str(sites)
+
+# Lihat 6 baris pertama
+head(sites)
+
+library(dplyr)
+
+sites %>%
+  select(station_code, location_id, latitude_dd, longitude_dd) %>%
+  print(n = 27)
+kualitas_monitoring %>%
+  select(stasiun) %>%
+  print(n = 27)
+names(metadata_sensor)
+head(metadata_sensor)
+
+library(dplyr)
+
+peta_kualitas <- kualitas_monitoring %>%
+  mutate(
+    station_code = paste0(
+      "AQMS-",
+      sub("_.*", "", stasiun)
+    )
+  ) %>%
+  left_join(
+    sites %>%
+      select(
+        station_code,
+        provinsi,
+        kota_kabupaten,
+        latitude_dd,
+        longitude_dd
+      ),
+    by = "station_code"
+  ) %>%
+  mutate(
+    latitude = latitude_dd,
+    longitude = longitude_dd
+  ) %>%
+  select(
+    stasiun,
+    provinsi,
+    kota_kabupaten,
+    latitude,
+    longitude,
+    persentase_lolos,
+    kategori_monitoring,
+    jumlah_gap_24jam,
+    gap_terpanjang
+  )
+
+print(peta_kualitas, n = 27)
+
+sum(!is.na(peta_kualitas$latitude))
+sum(!is.na(peta_kualitas$longitude))
+
+peta_kualitas %>%
+  filter(is.na(latitude) | is.na(longitude))
+
+write.csv(
+  peta_kualitas,
+  "OUTPUT/peta_kualitas_monitoring.csv",
+  row.names = FALSE
+)
+
+ls(pattern = "pm25|station|network", ignore.case = TRUE)
+names(pm25_station_contribution)
+head(pm25_station_contribution)
+
+ls(pattern = "pm25|station|network")
+ls(pattern = "peta|kualitas|sites|metadata")
+
+names(pm25_network)
+head(pm25_network)
+str(pm25_network)
+names(sites)
+head(sites)
+
+names(pm25_14okt)
+head(pm25_14okt)
+
+names(pm25_daily)
+head(pm25_daily)
+
+names(data_pm25)
+head(data_pm25)
+str(data_pm25)
+
+names(data_aqms_clean)
+head(data_aqms_clean[, c("stasiun", "timestamp_start", "pm25_ug_m3")])
+
+
+library(dplyr)
+library(lubridate)
+
+pm25_per_stasiun <- data_aqms_clean %>%
+  filter(
+    qc_flag == "VALID",
+    as.Date(timestamp_start) >= as.Date("2024-01-01"),
+    as.Date(timestamp_start) <= as.Date("2026-10-14")
+  ) %>%
+  group_by(stasiun) %>%
+  summarise(
+    rata_rata_pm25 = if (all(is.na(pm25_ug_m3))) {
+      NA_real_
+    } else {
+      mean(pm25_ug_m3, na.rm = TRUE)
+    },
+    jumlah_pengamatan = sum(!is.na(pm25_ug_m3)),
+    .groups = "drop"
+  )
+
+print(pm25_per_stasiun)
+pm25_per_stasiun <- pm25_per_stasiun %>%
+  mutate(kode_stasiun = sub("_.*", "", stasiun))
+
+sites_peta <- sites %>%
+  mutate(kode_stasiun = sub("^AQMS-", "", station_code))
+
+peta_pm25 <- pm25_per_stasiun %>%
+  left_join(
+    sites_peta,
+    by = "kode_stasiun"
+  ) %>%
+  mutate(
+    kategori_udara = case_when(
+      is.na(rata_rata_pm25) ~ "Tidak tersedia",
+      TRUE ~ "Belum dikategorikan"
+    )
+  ) %>%
+  select(
+    stasiun,
+    station_code,
+    provinsi,
+    kota_kabupaten,
+    latitude_dd,
+    longitude_dd,
+    rata_rata_pm25,
+    jumlah_pengamatan,
+    kategori_udara,
+    pm25_unit
+  )
+
+print(peta_pm25, n = 27)
+write.csv(
+  peta_pm25,
+  "OUTPUT/peta_pm25_per_stasiun.csv",
+  row.names = FALSE
+)
+nrow(peta_pm25)
+
+sum(is.na(peta_pm25$latitude_dd))
+sum(is.na(peta_pm25$longitude_dd))
+
+peta_pm25 %>%
+  select(stasiun, rata_rata_pm25, jumlah_pengamatan, kategori_udara)
+
+print(pm25_episode_median, n = 50)
+
+print(pm25_episode)
+
+print(
+  pm25_episode_median %>%
+    summarise(
+      total_episode = n(),
+      durasi_terpanjang = max(durasi_hari),
+      rata_rata_durasi = mean(durasi_hari),
+      median_durasi = median(durasi_hari)
+    )
+)
+
+
+# MEMBANDINGKAN HASIL EPISODE MEAN DAN MEDIAN
+
+hasil_perbandingan <- bind_rows(
+  pm25_episode %>%
+    summarise(
+      metode = "Mean",
+      jumlah_episode = n(),
+      durasi_terpanjang = max(durasi_hari),
+      rata_rata_durasi = mean(durasi_hari),
+      puncak_tertinggi = max(konsentrasi_puncak)
+    ),
+  
+  pm25_episode_median %>%
+    summarise(
+      metode = "Median",
+      jumlah_episode = n(),
+      durasi_terpanjang = max(durasi_hari),
+      rata_rata_durasi = mean(durasi_hari),
+      puncak_tertinggi = max(median_puncak)
+    )
+)
+
+print(hasil_perbandingan)
+pm25_episode %>%
+  filter(durasi_hari == 75)
+data.frame(
+  tanggal = pm25_daily$tanggal,
+  mean_pm25 = pm25_daily$rata_rata,
+  median_pm25 = pm25_daily$median
+) %>%
+  filter(
+    tanggal >= as.Date("2026-08-01"),
+    tanggal <= as.Date("2026-10-14")
+  )
